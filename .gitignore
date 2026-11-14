@@ -4,3 +4,6 @@ engine/target/
 benchmark-results/
 .DS_Store
 *.log
+.vercel/
+.vercel
+.env*

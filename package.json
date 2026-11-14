@@ -5,7 +5,7 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "homepage": "https://wrong-nebula.github.io/loverocks/",
+  "homepage": "https://love-rocks.vercel.app/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/wrong-nebula/loverocks.git"

@@ -1,5 +1,7 @@
 # loverocks
 
+**Live demo: [love-rocks.vercel.app](https://love-rocks.vercel.app)**
+
 **Fjord Stone** is a procedural rock studio that runs in the browser. Rust evaluates signed distance fields, cuts joints, carves eroded relief and extracts indexed meshes with surface masks. A Web Worker runs the generator as WebAssembly, and Three.js lights and renders the result in WebGL 2.
 
 It has two modes:
@@ -50,7 +52,7 @@ The repository includes the compiled WebAssembly module and its JavaScript bindi
 
 `dist/` is a static site with relative asset paths and needs no server-side code. Serve `.wasm` files as `application/wasm`.
 
-The included workflow (`.github/workflows/pages.yml`) builds the site and publishes it to GitHub Pages on every push to `main`. To turn it on, open the repository's **Settings → Pages** and set **Source** to **GitHub Actions**.
+The live demo is hosted on [Vercel](https://vercel.com). `vercel.json` sets the Vite build (`npm ci`, `npm run build`, output `dist/`), so importing the repository into Vercel, or running `vercel --prod`, deploys it as is.
 
 ## Change the Rust engine
 
