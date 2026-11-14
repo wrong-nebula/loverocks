@@ -75,7 +75,7 @@ pub fn generate(
         runoff: setting(7, 0.0, 1.0),
         frost: setting(8, 0.0, 1.0),
     };
-    let resolution = resolution.clamp(10, 176);
+    let resolution = resolution.clamp(10, 256);
     let mesh = match (volcanic, geology) {
         (Some((kind, _)), _) => volcanic::generate(kind, seed, resolution, settings),
         (_, Some((kind, _))) => {

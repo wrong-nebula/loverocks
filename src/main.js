@@ -121,7 +121,8 @@ const surfaceLoad=fetch(import.meta.env.BASE_URL+'surface/relief-448.rgba').then
     surfaceTexture.needsUpdate=true;
 }).catch(error=>console.error(error));
 
-const baseMaterial=new T.MeshPhysicalMaterial({vertexColors:true,roughness:1,clearcoat:1,clearcoatRoughness:0.28});
+// Sheen is enabled for the material but tinted per pixel, so only moss gets the velvet rim.
+const baseMaterial=new T.MeshPhysicalMaterial({vertexColors:true,roughness:1,clearcoat:1,clearcoatRoughness:0.28,sheen:1,sheenColor:0x000000});
 baseMaterial.defaultAttributeValues={meshWeather:[0,1]};
 baseMaterial.onBeforeCompile=shader=>{
     shader.uniforms.rockGrain=rockGrain;
@@ -156,21 +157,49 @@ baseMaterial.onBeforeCompile=shader=>{
                 else if(stoneType<4.5) stone=slateStone(vRockPoint,vEdgeTransmission,footprint);
                 else if(stoneType<5.5) stone=conglomerateStone(vRockPoint,footprint);
                 else stone=schistStone(vRockPoint,vEdgeTransmission,footprint);
-                diffuseColor.rgb=mix(stone.albedo,vec3(.064,.076,.029),vSurface.z)*(1.-.44*vSurface.y-.16*vFresh);
+                diffuseColor.rgb=stone.albedo*(1.-.44*vSurface.y-.16*vFresh);
                 graniteRoughness=stone.roughness; graniteTilt=stone.tilt; stoneSmooth=stone.smoothness; stoneSpecular=stone.specular; stoneRelief=stone.relief;
             }
             if(crystalline>0.){
                 granitePolish=clamp(vEdgeTransmission,0.,1.);
                 Mineral mineral=graniteFabric(vRockPoint,footprint,granitePolish);
-                // Same moss and wetting the engine applies to the vertex colour.
-                diffuseColor.rgb=mix(mineral.albedo,vec3(.064,.076,.029),vSurface.z)
-                    *(1.-.44*vSurface.y-.16*vFresh);
+                // Same wetting the engine applies to the vertex colour; moss is drawn below.
+                diffuseColor.rgb=mineral.albedo*(1.-.44*vSurface.y-.16*vFresh);
                 graniteRoughness=mineral.roughness; graniteTilt=mineral.tilt; graniteBoundary=mineral.boundary;
             }
             if(bedded>0.){
                 vec4 lamina=sandstoneLaminae(vEdgeTransmission,vRockPoint);
                 diffuseColor.rgb*=lamina.rgb;
                 laminaRelief=lamina.a;
+            }
+            // Per-pixel moss: clumpy edges and individual cushions drawn over the rock
+            // colour, recovered from the engine's per-vertex blend where needed.
+            float mossV=vSurface.z, mossPx=0., mossRelief=0.;
+            if(mossV>.002){
+                float cushion=.55*rockNoise(vRockPoint*30.)+.30*rockNoise(vRockPoint*75.+2.)+.15*rockNoise(vRockPoint*160.+5.);
+                float edgeW=.08+.6*fwidth(mossV)+.15*smoothstep(.3,.9,footprint*75.);
+                mossPx=max(smoothstep(.42-edgeW,.42+edgeW,mossV+(cushion-.5)*.7),smoothstep(.88,.98,mossV));
+                // Soft cushions: rounded, lighter tops with darker hollows between them.
+                float tuftFade=1.-smoothstep(.3,.9,footprint*48.);
+                float clump=.65*rockNoise(vRockPoint*48.)+.35*rockNoise(vRockPoint*91.+7.);
+                float dome=mix(1.,mix(.62,1.08,smoothstep(.22,.72,clump)),tuftFade);
+                // Velvet: a dense fuzz of tiny leaves at two scales.
+                float leafFade=1.-smoothstep(.3,.9,footprint*340.);
+                float fibre=(rockNoise(vRockPoint*340.)-.5)*leafFade+.5*(rockNoise(vRockPoint*150.+9.)-.5)*(1.-smoothstep(.3,.9,footprint*150.));
+                // Living moss is lime to yellow-green on the tops, deep green in the hollows.
+                float tone=clamp(.40+.50*(cushion-.5)+.45*(clump-.5)*tuftFade+.55*fibre,0.,1.);
+                vec3 deep=vec3(.018,.050,.006), mid=vec3(.060,.135,.012), lime=vec3(.165,.255,.022);
+                vec3 mossCol=(tone<.5?mix(deep,mid,tone*2.):mix(mid,lime,tone*2.-1.))*dome;
+                // Patches of a second, darker species and a few dry, brownish tufts.
+                float species=smoothstep(.55,.75,rockNoise(vRockPoint*6.+21.));
+                mossCol=mix(mossCol,mossCol*vec3(.62,.80,.70),.6*species);
+                float dry=smoothstep(.70,.90,rockNoise(vRockPoint*14.+4.))*tuftFade;
+                mossCol=mix(mossCol,vec3(.10,.085,.030)*dome,.35*dry);
+                mossRelief=(.22*fibre+.16*(clump-.5)*tuftFade)*mossPx;
+                mossCol*=1.-.40*vSurface.y;
+                vec3 bakedMoss=vec3(.077,.087,.023)*(1.-.40*vSurface.y);
+                vec3 rockCol=perPixelStone?diffuseColor.rgb:clamp((diffuseColor.rgb-bakedMoss*mossV)/max(1.-mossV,.2),0.,1.);
+                diffuseColor.rgb=mix(rockCol,mossCol,mossPx);
             }
             float flake=filteredGrain(vRockPoint,34.,footprint);
             float grit=filteredGrain(vRockPoint,102.,footprint);
@@ -193,23 +222,20 @@ baseMaterial.onBeforeCompile=shader=>{
             float smoothFacet=max(max(crystalline*granitePolish,stoneSmooth),gloss);
             // Moss and lichen sit on top of the rock: none of the rock's grain,
             // noise or layering shows through them.
-            float growth=clamp(max(smoothstep(.05,.45,vSurface.z),colony.x),0.,1.);
+            float growth=clamp(max(mossPx,colony.x),0.,1.);
             float rockTexture=1.-growth;
             float mineralRelief=(.38*flake+.155*grit+.058*micro)*rockGrain*mix(1.,.14,smoothFacet)*rockTexture;
             float mapRelief=((rockMap.r-.5)*.21+(rockMap.a-.5)*.14)*rockMapAmount*mix(1.,.08,smoothFacet)*rockTexture;
-            float relief=mix(mineralRelief+mapRelief+.24*colony.x+(laminaRelief*bedded+stoneRelief-.20*crystalline*(1.-graniteBoundary))*rockTexture,flake*.17+grit*.095,snow);
+            float relief=mix(mineralRelief+mapRelief+mossRelief+.24*colony.x+(laminaRelief*bedded+stoneRelief-.20*crystalline*(1.-graniteBoundary))*rockTexture,flake*.17+grit*.095,snow);
             diffuseColor.rgb*=1.+(mineralRelief+mapRelief)*mix(.44,.73,vSurface.z);
             diffuseColor.rgb*=1.+rockMapAmount*(rockMap.b*.13-rockMap.g*.085)*rockTexture;
-            // Moss has its own fine, soft colour variation (no relief) instead of rock grain.
-            float mossFuzz=(rockNoise(vRockPoint*190.)-.5)*(1.-smoothstep(.3,.9,footprint*190.))
-                +.6*(rockNoise(vRockPoint*55.+3.)-.5);
-            diffuseColor.rgb*=1.+.22*mossFuzz*smoothstep(.05,.45,vSurface.z)*(1.-colony.x);
             vec3 lichenColor=mix(vec3(.245,.275,.205),vec3(.395,.355,.21),colony.y);
             lichenColor*=1.+.12*grit;
             diffuseColor.rgb=mix(diffuseColor.rgb,lichenColor,colony.x*.74);
             diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.76,.84,.89)*(1.+.12*grit),snow);`)
         .replace('#include <roughnessmap_fragment>',`#include <roughnessmap_fragment>
             float rockRoughness=perPixelStone?graniteRoughness-.21*vSurface.y+.16*mineralRelief*(1.-smoothFacet):vSurface.x+.16*mineralRelief;
+            rockRoughness=mix(rockRoughness,.88,mossPx*.7);
             roughnessFactor=mix(clamp(rockRoughness,.06,1.),.96,max(colony.x*.88,snow));`)
         .replace('#include <normal_fragment_maps>',`#include <normal_fragment_maps>
             vec3 dpdx=dFdx(-vViewPosition);
@@ -229,6 +255,11 @@ baseMaterial.onBeforeCompile=shader=>{
             material.clearcoatRoughness = mix(.43,.23,vSurface.y);
             // Dusty specimen surfaces reflect less than a clean dielectric.
             material.specularColor*=mix(stoneSpecular,vec3(1.),max(vSurface.y,snow));
+            #ifdef USE_SHEEN
+                // Leaf tips scatter light at grazing angles: a soft velvet rim on moss only.
+                material.sheenColor=vec3(.26,.38,.07)*mossPx*(1.-colony.x)*(1.-snow);
+                material.sheenRoughness=.55;
+            #endif
             material.specularF90*=mix(dot(stoneSpecular,vec3(1./3.)),1.,max(vSurface.y,snow));`)
         .replace('#include <aomap_fragment>',`#include <aomap_fragment>
             float sdfAO=mix(1.,vRockAO,aoAmount);
@@ -251,7 +282,9 @@ baseMaterial.onBeforeCompile=shader=>{
             float tint=vEdgeTransmission*carriesTransmission*rim*(.15+.82*back*towardViewer);
             totalEmissiveRadiance+=(stoneType>2.5?vec3(.62,.58,.50)*.55:vec3(.63,.177,.054))*tint;
             // Marble scatters light under the surface: lift its shadows with a warm glow.
-            if(stoneType>2.5&&stoneType<3.5) totalEmissiveRadiance+=diffuseColor.rgb*vec3(1.,.92,.80)*.10*(1.-max(colony.x,snow));`);
+            if(stoneType>2.5&&stoneType<3.5) totalEmissiveRadiance+=diffuseColor.rgb*vec3(1.,.92,.80)*.10*(1.-max(colony.x,snow));
+            // Thin moss glows lime where the sun shines through it from behind.
+            totalEmissiveRadiance+=diffuseColor.rgb*vec3(1.5,1.9,.6)*mossPx*(1.-snow)*(.06+.55*back*towardViewer*(.35+.65*rim));`);
     if(turntableMode){
         shader.uniforms.cameraLut=cameraLut;
         shader.uniforms.cameraLutStrength=cameraLutStrength;

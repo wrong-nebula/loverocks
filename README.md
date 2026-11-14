@@ -4,7 +4,7 @@
 
 **Fjord Stone** is a procedural rock studio that runs in the browser. Rust evaluates signed distance fields, cuts joints, carves eroded relief and extracts indexed meshes with surface masks. A Web Worker runs the generator as WebAssembly, and Three.js lights and renders the result in WebGL 2.
 
-You orbit a single rock, chosen from 13 types, under a physically based sky. Meshes build at **Ultra** detail by default.
+You orbit a single rock, chosen from 13 types, under a physically based sky. Meshes build at **Ultra** detail (resolution 224, about 200k triangles) by default; **Maximum** goes to 256.
 
 ## Rock types
 
@@ -20,10 +20,11 @@ Each rock type sets its own shape and its geological features: bedding, cleavage
 - **Randomize** (or the **R** key) rolls a whole new rock: a random rock type, seed, climate, elapsed years and sun angle, with weathering and surface values drawn around that rock type's defaults.
 - **Weathering:** elapsed years under a simulated alpine, maritime or continental climate, surface weathering, joint opening and erosion carving.
 - **Surface:** moss, moisture, lichen, snow and ambient occlusion. The rock's fine grain relief fades out on smooth, glossy and wet areas and never shows through moss or lichen.
+- **Moss** has real volume: the mesh worker raises moss into lumpy cushions with thick edges and rebuilds their normals, so moss shapes the silhouette, casts shadows and is included in GLB export. The shader draws clumpy patch edges and a velvety leaf texture, lime to deep green, with a soft sheen at grazing angles and a glow where sunlight comes through thin edges.
 - **View:** material, clay, normals, wireframe, and masks for moss, wetness, lichen, snow, roughness and AO.
 - **Render 4K PNG** saves the current view with a 3,840-pixel long edge. **Export rock GLB** saves the generated meshes with normals and vertex colours.
 
-Drag to orbit, scroll or pinch to zoom, and right-drag to pan. Mesh detail can be lowered to Fine, Detailed or Draft on slower devices.
+Drag to orbit, scroll or pinch to zoom, and right-drag to pan. Mesh detail can be lowered to High, Fine, Detailed or Draft on slower devices; on a recent laptop Ultra builds in about 2–4 seconds.
 
 GLB export keeps vertex colours only, so the per-pixel detail of the specimen stones is not included.
 
