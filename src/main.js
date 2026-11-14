@@ -3,8 +3,6 @@ import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
-import {paintingAspect,paintingCamera,paintingObjects,projectPaintingRock} from './layout.js';
-import {makeLandscape,makePebbles} from './landscape.js';
 import {loadAtmosphere,makeSky,setSkySun} from './atmosphere.js';
 import surfaceDetail from './surface-detail.glsl?raw';
 import geologyDetail from './geology-detail.glsl?raw';
@@ -27,21 +25,20 @@ for(const [group,entries] of [['volcanic',volcanicPresets],['geology',geologyPre
 }
 // Offset shared by the shader and the engine so per-pixel features match the mesh.
 const seedAnchor=seed=>{const r=seeded(seed);return [r()*37,r()*37,r()*37];};
-const specimenPreset=()=>state.scene||!presets[state.form].group?undefined:presets[state.form];
+const specimenPreset=()=>presets[state.form].group?presets[state.form]:undefined;
 const params=new URLSearchParams(location.search);
-const turntableMode=params.has('turntable')&&params.get('mode')==='specimen';
+const turntableMode=params.has('turntable');
 const state={
-    scene:params.get('mode')!=='specimen',
     form:T.MathUtils.clamp(Math.floor(Number(params.get('form'))||0),0,presets.length-1),
-    seed:params.get('seed')?.slice(0,96)||'painting',
-    years:0,climate:'alpine',grass:1,light:34,view:'material',ao:0.82,snow:params.get('weather')==='snow'?.82:0
+    seed:params.get('seed')?.slice(0,96)||'',
+    years:0,climate:'alpine',light:34,view:'material',ao:0.82,snow:params.get('weather')==='snow'?.82:0
 };
-if(!state.scene && !params.has('seed')) state.seed=presets[state.form].seed;
+if(!state.seed) state.seed=presets[state.form].seed;
 const fields=[
     ['years','Elapsed years',0,1000,1],['weather','Surface weathering',0,.55,.005],
     ['fracture','Joint opening',0,.19,.001],['carving','Erosion carving',0,1,.01],
     ['ao','Ambient occlusion',0,1,.01],['snow','Snow cover',0,1,.01],['moss','Moss',0,1,.01],['wet','Surface moisture',0,1,.01],['lichen','Lichens',0,1,.01],
-    ['grass','Grass density',0,1.65,.05],['light','Sun elevation',10,70,1]
+    ['light','Sun elevation',10,70,1]
 ];
 function makeRenderer() {
     try {
@@ -60,9 +57,9 @@ renderer.toneMappingExposure=1.05;
 renderer.domElement.setAttribute('aria-label','Interactive three-dimensional rock preview');
 viewport.prepend(renderer.domElement);
 const scene=new T.Scene();
-scene.background=new T.Color(0x536861);
-scene.fog=new T.FogExp2(0x687e75,0.011);
-const camera=new T.PerspectiveCamera(42,paintingAspect,0.045,330);
+scene.background=new T.Color(0x33362e);
+scene.fog=new T.FogExp2(0x33362e,0.011);
+const camera=new T.PerspectiveCamera(40,1,0.045,330);
 const controls=new OrbitControls(camera,renderer.domElement);
 controls.minDistance=1.9;
 controls.maxDistance=16;
@@ -72,7 +69,7 @@ const pmrem=new T.PMREMGenerator(renderer);
 const room=new RoomEnvironment();
 const environment=pmrem.fromScene(room,0.12);
 scene.environment=environment.texture;
-scene.environmentIntensity=0.26;
+scene.environmentIntensity=0.45;
 room.dispose();
 pmrem.dispose();
 const skyFill=new T.HemisphereLight(0xc9dfe8,0x5e573c,0.85);
@@ -84,23 +81,18 @@ sun.shadow.normalBias=0.018;
 sun.shadow.bias=-0.00013;
 sun.shadow.radius=2.3;
 scene.add(sun,sun.target);
-const dome=makeSky();
-dome.visible=false;
-scene.add(dome);
 let atmosphereReady=false;
 const atmosphereLoad=loadAtmosphere().then(()=>{
     atmosphereReady=true;
-    dome.visible=state.scene;
-    landscape?.traverse(object=>{if(object.name==='Lake')object.visible=true;});
     render();
 }).catch(error=>{
     console.error(error);
-    el('status').textContent='Sky and water are unavailable. Reload the page to retry.';
+    el('status').textContent='The sky is unavailable. Reload the page to retry.';
 });
 
 const rockGroup=new T.Group();
 scene.add(rockGroup);
-let landscape,pebbles,worker,jobId=0,jobs=[],rockMeshes=[],transforms=[],rockTimer,grassTimer;
+let landscape,worker,jobId=0,jobs=[],rockMeshes=[],rockTimer;
 let exposureHistory,historyKey;
 const aoAmount={value:state.ao};
 const snowAmount={value:0};
@@ -193,14 +185,27 @@ baseMaterial.onBeforeCompile=shader=>{
                 snow=smoothstep(edge-.07,edge+.17,coverage);
                 snow*=smoothstep(.28,.64,normalize(vRockNormal).y);
             }
-            float smoothFacet=max(crystalline*granitePolish,stoneSmooth);
-            float mineralRelief=(.38*flake+.155*grit+.058*micro)*rockGrain*mix(1.,.14,smoothFacet);
-            float mapRelief=((rockMap.r-.5)*.21+(rockMap.a-.5)*.14)*rockMapAmount*mix(1.,.08,smoothFacet);
-            float relief=mix(mineralRelief+mapRelief+.24*colony.x+laminaRelief*bedded+stoneRelief-.20*crystalline*(1.-graniteBoundary),flake*.17+grit*.095,snow);
+            // Smooth, specular surfaces (low roughness, wet clearcoat) show no fine
+            // grain: fade the grain and noise relief wherever the surface is glossy.
+            float baseRoughness=perPixelStone?graniteRoughness-.21*vSurface.y:vSurface.x;
+            float wetGloss=smoothstep(.26,.89,vSurface.y)*(1.-.91*vSurface.z);
+            float gloss=max(1.-smoothstep(.28,.62,baseRoughness),wetGloss);
+            float smoothFacet=max(max(crystalline*granitePolish,stoneSmooth),gloss);
+            // Moss and lichen sit on top of the rock: none of the rock's grain,
+            // noise or layering shows through them.
+            float growth=clamp(max(smoothstep(.05,.45,vSurface.z),colony.x),0.,1.);
+            float rockTexture=1.-growth;
+            float mineralRelief=(.38*flake+.155*grit+.058*micro)*rockGrain*mix(1.,.14,smoothFacet)*rockTexture;
+            float mapRelief=((rockMap.r-.5)*.21+(rockMap.a-.5)*.14)*rockMapAmount*mix(1.,.08,smoothFacet)*rockTexture;
+            float relief=mix(mineralRelief+mapRelief+.24*colony.x+(laminaRelief*bedded+stoneRelief-.20*crystalline*(1.-graniteBoundary))*rockTexture,flake*.17+grit*.095,snow);
             diffuseColor.rgb*=1.+(mineralRelief+mapRelief)*mix(.44,.73,vSurface.z);
-            diffuseColor.rgb*=1.+rockMapAmount*(rockMap.b*.13-rockMap.g*.085);
+            diffuseColor.rgb*=1.+rockMapAmount*(rockMap.b*.13-rockMap.g*.085)*rockTexture;
+            // Moss has its own fine, soft colour variation (no relief) instead of rock grain.
+            float mossFuzz=(rockNoise(vRockPoint*190.)-.5)*(1.-smoothstep(.3,.9,footprint*190.))
+                +.6*(rockNoise(vRockPoint*55.+3.)-.5);
+            diffuseColor.rgb*=1.+.22*mossFuzz*smoothstep(.05,.45,vSurface.z)*(1.-colony.x);
             vec3 lichenColor=mix(vec3(.245,.275,.205),vec3(.395,.355,.21),colony.y);
-            lichenColor*=1.+.52*grit;
+            lichenColor*=1.+.12*grit;
             diffuseColor.rgb=mix(diffuseColor.rgb,lichenColor,colony.x*.74);
             diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.76,.84,.89)*(1.+.12*grit),snow);`)
         .replace('#include <roughnessmap_fragment>',`#include <roughnessmap_fragment>
@@ -212,7 +217,7 @@ baseMaterial.onBeforeCompile=shader=>{
             vec3 r1=cross(dpdy,normal);
             vec3 r2=cross(normal,dpdx);
             float det=dot(dpdx,r1);
-            float bump=(.015+.011*vSurface.z)*max(length(dpdx),length(dpdy))/max(footprint,1e-5);
+            float bump=.015*max(length(dpdx),length(dpdy))/max(footprint,1e-5);
             vec3 gradient=(dFdx(relief)*r1+dFdy(relief)*r2)*bump*sign(det);
             normal=normalize(max(abs(det),1e-9)*normal-gradient);
             if(perPixelStone){
@@ -288,23 +293,13 @@ const mask=new T.ShaderMaterial({
 function render() {renderer.render(scene,camera);}
 function cameraReset() {
     const p=presets[state.form];
-    if(state.scene) {
-        camera.position.set(...paintingCamera.eye);
-        controls.target.set(...paintingCamera.aim);
-        camera.fov=T.MathUtils.radToDeg(2*Math.atan(1/paintingCamera.zoom));
-    } else {
-        controls.target.set(0,Math.max(0.45,p.height),0);
-        camera.position.copy(controls.target).add(new T.Vector3(
-            Math.sin(p.azimuth)*5.35,Math.sin(p.elevation)*5.35,Math.cos(p.azimuth)*5.35));
-        camera.fov=40;
-    }
-    controls.enabled=!state.scene;
-    renderer.domElement.style.touchAction=state.scene?'auto':'none';
-    renderer.domElement.tabIndex=state.scene?-1:0;
-    renderer.domElement.setAttribute('aria-label',state.scene?'Painting scene preview':'Rock preview. Arrow keys orbit. Plus and minus zoom.');
-    scene.background.set(state.scene?0x536861:0x33362e);
-    scene.fog.color.set(state.scene?0x687e75:0x33362e);
-    dome.visible=state.scene&&atmosphereReady;
+    controls.target.set(0,Math.max(0.45,p.height),0);
+    camera.position.copy(controls.target).add(new T.Vector3(
+        Math.sin(p.azimuth)*5.35,Math.sin(p.elevation)*5.35,Math.cos(p.azimuth)*5.35));
+    camera.fov=40;
+    renderer.domElement.style.touchAction='none';
+    renderer.domElement.tabIndex=0;
+    renderer.domElement.setAttribute('aria-label','Rock preview. Arrow keys orbit. Plus and minus zoom.');
     const type=specimenPreset()?.seed;
     const glass=type==='glass-buttes';
     const granite=type==='st-cloud-granite';
@@ -313,24 +308,26 @@ function cameraReset() {
     stoneType.value={'vermont-marble':3,'bangor-slate':4,'oligomict-conglomerate':5,'mica-schist':6}[type]||0;
     rockSeed.value.set(...seedAnchor(state.seed));
     const fine={'vermont-marble':[.35,.20],'bangor-slate':[.30,.20],'oligomict-conglomerate':[.6,.5],'mica-schist':[.45,.35],'red-rock-canyon':[.78,.55]}[type];
-    rockGrain.value=glass?.12:fine?.[0]??1;
-    rockMapAmount.value=glass?.075:fine?.[1]??1;
-    scene.environmentIntensity=glass?.92:granite?.76:state.scene?.26:.45;
+    // Fjord rocks (no preset group) get a calmer surface: less grain and map relief.
+    const fjord=!presets[state.form].group;
+    rockGrain.value=glass?.12:fine?.[0]??(fjord?.32:1);
+    rockMapAmount.value=glass?.075:fine?.[1]??(fjord?.34:1);
+    scene.environmentIntensity=glass?.92:granite?.76:.45;
     baseMaterial.ior=glass?1.49:granite?1.54:1.50;
-    camera.aspect=state.scene?paintingAspect:viewport.clientWidth/Math.max(viewport.clientHeight,1);
+    camera.aspect=viewport.clientWidth/Math.max(viewport.clientHeight,1);
     camera.updateProjectionMatrix();
     controls.update();
     render();
 }
 function lights() {
-    const angle=state.scene?2.46:presets[state.form].sun;
+    const angle=presets[state.form].sun;
     const elev=T.MathUtils.degToRad(state.light);
     const direction=new T.Vector3(Math.cos(angle)*Math.cos(elev),Math.sin(elev),Math.sin(angle)*Math.cos(elev));
     setSkySun(direction);
     rockLightDirection.value.copy(direction);
-    sun.target.position.set(0,0,state.scene?-9:0);
+    sun.target.position.set(0,0,0);
     sun.position.copy(sun.target.position).addScaledVector(direction,18);
-    const span=state.scene?15:4;
+    const span=4;
     Object.assign(sun.shadow.camera,{left:-span,right:span,top:span,bottom:-span,near:1,far:48});
     sun.shadow.camera.updateProjectionMatrix();
     sun.color.set(0xffe4bd).lerp(new T.Color(0xffbf76),1-T.MathUtils.smoothstep(state.light,10,42));
@@ -352,17 +349,11 @@ function dispose(group) {
 }
 function landscapeUpdate() {
     if(landscape) dispose(landscape);
-    if(state.scene) {
-        landscape=makeLandscape(state.seed,state.grass);
-        landscape.getObjectByName('Lake').visible=atmosphereReady;
-    }
-    else {
-        landscape=new T.Group();
-        const floor=new T.Mesh(new T.PlaneGeometry(160,160),new T.MeshStandardMaterial({color:0x434438,roughness:0.96}));
-        floor.rotation.x=-Math.PI/2;
-        floor.receiveShadow=true;
-        landscape.add(floor);
-    }
+    landscape=new T.Group();
+    const floor=new T.Mesh(new T.PlaneGeometry(160,160),new T.MeshStandardMaterial({color:0x434438,roughness:0.96}));
+    floor.rotation.x=-Math.PI/2;
+    floor.receiveShadow=true;
+    landscape.add(floor);
     scene.add(landscape);
     render();
 }
@@ -373,9 +364,7 @@ function options(form) {
         historyKey=key;
     }
     return [
-        state.scene?p.weather*state.weather/0.15:state.weather,p.rounding,
-        state.scene?p.fracture*state.fracture/0.08:state.fracture,state.carving,
-        state.scene?p.moss*state.moss/0.34:state.moss,state.wet,state.lichen,
+        state.weather,p.rounding,state.fracture,state.carving,state.moss,state.wet,state.lichen,
         1-Math.exp(-exposureHistory.runoff[state.years]/16700),1-Math.exp(-exposureHistory.frost[state.years]/5700),
         ...seedAnchor(state.seed)
     ];
@@ -402,7 +391,6 @@ function currentMaterial() {
 function updateView() {
     const material=currentMaterial();
     rockGroup.traverse(object=>{if(object.isMesh)object.material=material;});
-    pebbles?.traverse(object=>{if(object.isMesh)object.material=material;});
     landscape.visible=state.view==='material'||state.view==='clay';
     render();
 }
@@ -416,10 +404,7 @@ function generate() {
     el('glb').disabled=true;
     el('png').disabled=true;
     const detail=turntableMode?160:Number(el('detail').value);
-    jobs=state.scene?paintingObjects(state.seed).map((job,index)=>({...job,
-        resolution:index<6?detail:(index<18?Math.max(22,Math.round(detail*0.58)):Math.max(13,Math.round(detail*0.31))),
-        options:options(job.form)
-    })):[{form:state.form,seed:state.seed,resolution:detail,options:options(state.form),meshWeather:!turntableMode}];
+    jobs=[{form:state.form,seed:state.seed,resolution:detail,options:options(state.form),meshWeather:!turntableMode}];
     let incoming=[];
     worker.onmessage=({data})=>{
         if(data.id!==jobId)return;
@@ -434,32 +419,16 @@ function generate() {
             el('status').textContent=`Building rocks · ${data.index+1} / ${jobs.length}`;
             return;
         }
-        pebbles?.traverse(object=>{if(object.isInstancedMesh)object.dispose();});
         for(const child of rockGroup.children) child.geometry.dispose();
         rockGroup.clear();
-        pebbles?.removeFromParent();
-        pebbles=undefined;
         rockMeshes=[];
-        transforms=[];
         for(const [index,item] of incoming.entries()) {
             const job=jobs[index],mesh=new T.Mesh(asGeometry(item),currentMaterial());
             mesh.name=job.seed;
             mesh.castShadow=true;
             mesh.receiveShadow=true;
-            if(job.placement) {
-                const p=projectPaintingRock(item.bounds,...job.placement);
-                transforms[index]=p;
-                mesh.scale.set(...p.scale);
-                mesh.rotation.y=p.yaw;
-                const center=new T.Vector3(...p.center).multiply(mesh.scale).applyAxisAngle(new T.Vector3(0,1,0),p.yaw);
-                mesh.position.set(...p.foot).sub(center);
-            }
             rockGroup.add(mesh);
             rockMeshes[index]=mesh;
-        }
-        if(state.scene) {
-            pebbles=makePebbles(rockMeshes,transforms,state.seed);
-            scene.add(pebbles);
         }
         incoming=[];
         worker.terminate();
@@ -475,34 +444,27 @@ function generate() {
     worker.postMessage({id,jobs});
 }
 function updateUrl() {
-    const query=new URLSearchParams({mode:state.scene?'painting':'specimen',form:state.form,seed:state.seed});
+    const query=new URLSearchParams({form:state.form,seed:state.seed});
     window.history.replaceState(null,'','?'+query);
 }
 function resetSurface() {
     const p=presets[state.form];
-    Object.assign(state,{weather:state.scene?0.15:p.weather,fracture:state.scene?0.08:p.fracture,
-        carving:p.carving??0.52,moss:state.scene?0.34:p.moss,wet:p.wet??0.48,lichen:p.lichen??0.57});
+    Object.assign(state,{weather:p.weather,fracture:p.fracture,
+        carving:p.carving??0.52,moss:p.moss,wet:p.wet??0.48,lichen:p.lichen??0.57});
 }
 function sync() {
-    el('scene').setAttribute('aria-pressed',state.scene);
-    el('specimen').setAttribute('aria-pressed',!state.scene);
-    el('form-row').hidden=state.scene;
     el('form').value=state.form;
     el('seed').value=state.seed;
-    el('stage').dataset.mode=state.scene?'painting':'specimen';
-    el('hint').textContent=state.scene?'Fixed painting camera':'Drag to orbit · Scroll to zoom';
-    el('reset').hidden=state.scene;
-    el('view').querySelector('[value=snow]').hidden=state.scene||turntableMode;
-    if((state.scene||turntableMode)&&state.view==='snow'){
+    el('view').querySelector('[value=snow]').hidden=turntableMode;
+    if(turntableMode&&state.view==='snow'){
         state.view='material';
         el('view').value='material';
     }
-    snowAmount.value=state.scene||turntableMode?0:state.snow;
+    snowAmount.value=turntableMode?0:state.snow;
     for(const [key,,min,max] of fields) {
         el(key).value=state[key];
         sliderValue(key,min,max);
-        if(key==='grass') el(key).parentElement.hidden=!state.scene;
-        if(key==='snow') el(key).parentElement.hidden=state.scene||turntableMode;
+        if(key==='snow') el(key).parentElement.hidden=turntableMode;
     }
 }
 function sliderValue(key,min,max) {
@@ -514,7 +476,7 @@ for(const [key,label,min,max,step] of fields) {
     const row=document.createElement('div');
     row.className='parameter';
     row.innerHTML=`<label for="${key}">${label}</label><output id="${key}-value" for="${key}"></output><input type="range" id="${key}" min="${min}" max="${max}" step="${step}">`;
-    const section=['grass','light'].includes(key)?'scene':
+    const section=key==='light'?'scene':
         ['moss','wet','lichen','snow','ao'].includes(key)?'surface':'weather';
     el(section+'-controls').append(row);
     el(key).addEventListener('input',()=>{
@@ -523,54 +485,39 @@ for(const [key,label,min,max,step] of fields) {
         if(key==='light'){lights();return;}
         if(key==='ao'){aoAmount.value=state.ao;render();return;}
         if(key==='snow'){snowAmount.value=state.snow;render();return;}
-        if(key==='grass'){
-            clearTimeout(grassTimer);
-            grassTimer=setTimeout(landscapeUpdate,140);
-        }else{
-            clearTimeout(rockTimer);
-            rockTimer=setTimeout(generate,180);
-        }
+        clearTimeout(rockTimer);
+        rockTimer=setTimeout(generate,180);
     });
 }
-function switchMode(painting) {
-    if(state.scene===painting)return;
-    state.scene=painting;
-    state.seed=painting?'painting':presets[state.form].seed;
-    el('detail').value=painting?'54':specimenPreset()?'88':el('detail').value;
-    resetSurface();sync();updateUrl();landscapeUpdate();cameraReset();lights();generate();
-}
-el('scene').onclick=()=>switchMode(true);
-el('specimen').onclick=()=>switchMode(false);
 el('form').onchange=()=>{
     state.form=Number(el('form').value);
     state.seed=presets[state.form].seed;
-    if(specimenPreset()) el('detail').value='88';
     resetSurface();sync();updateUrl();cameraReset();lights();generate();
 };
 el('seed-form').onsubmit=event=>{
     event.preventDefault();
-    state.seed=el('seed').value.trim()||(state.scene?'painting':presets[state.form].seed);
-    sync();updateUrl();landscapeUpdate();generate();
+    state.seed=el('seed').value.trim()||presets[state.form].seed;
+    sync();updateUrl();generate();
 };
 el('shuffle').onclick=()=>{
     el('seed').value='fjord-'+crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
     el('seed-form').requestSubmit();
 };
 // Roll a whole new rock. Surface values are drawn around the rock type's own
-// defaults, so clean specimens stay clean; view settings (AO, snow, grass,
-// mesh detail) are left alone.
+// defaults, so clean specimens stay clean; view settings (AO, snow, mesh
+// detail) are left alone.
 function randomize() {
     const random=(min,max)=>min+(max-min)*Math.random();
     const clamp=(key,value)=>{
         const [, , min,max,step]=fields.find(field=>field[0]===key);
         return Math.min(max,Math.max(min,Math.round(value/step)*step));
     };
-    if(!state.scene) state.form=Math.floor(Math.random()*presets.length);
+    state.form=Math.floor(Math.random()*presets.length);
     const p=presets[state.form];
-    state.seed=(state.scene?'painting':'stone')+'-'+crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
+    state.seed='stone-'+crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
     state.climate=['alpine','maritime','continental'][Math.floor(Math.random()*3)];
-    const base={weather:state.scene?.15:p.weather,fracture:state.scene?.08:p.fracture,carving:p.carving??.52,
-        moss:state.scene?.34:p.moss,wet:p.wet??.48,lichen:p.lichen??.57};
+    const base={weather:p.weather,fracture:p.fracture,carving:p.carving??.52,
+        moss:p.moss,wet:p.wet??.48,lichen:p.lichen??.57};
     Object.assign(state,{
         years:clamp('years',random(0,1000)),
         weather:clamp('weather',base.weather*random(.45,1.9)),
@@ -582,10 +529,7 @@ function randomize() {
         light:clamp('light',random(18,58))
     });
     el('climate').value=state.climate;
-    if(specimenPreset()) el('detail').value='88';
-    sync();updateUrl();cameraReset();lights();
-    if(state.scene) landscapeUpdate();
-    generate();
+    sync();updateUrl();cameraReset();lights();generate();
 }
 el('randomize').onclick=randomize;
 document.addEventListener('keydown',event=>{
@@ -597,7 +541,6 @@ el('view').onchange=()=>{state.view=el('view').value;updateView();};
 el('climate').onchange=()=>{state.climate=el('climate').value;generate();};
 el('reset').onclick=cameraReset;
 renderer.domElement.addEventListener('keydown',event=>{
-    if(state.scene)return;
     switch(event.key) {
         case 'ArrowLeft': controls.rotateLeft(.10); break;
         case 'ArrowRight': controls.rotateLeft(-.10); break;
@@ -665,12 +608,10 @@ new ResizeObserver(()=>{
     const {width,height}=viewport.getBoundingClientRect();
     if(width<1||height<1)return;
     renderer.setSize(width,height,false);
-    camera.aspect=state.scene?paintingAspect:width/height;
+    camera.aspect=width/height;
     camera.updateProjectionMatrix();
     render();
 }).observe(viewport);
-if(specimenPreset()) el('detail').value='88';
-if(turntableMode) el('detail').value='144';
 resetSurface();sync();landscapeUpdate();cameraReset();lights();
 Promise.all([atmosphereLoad,surfaceLoad]).then(generate);
 
@@ -681,7 +622,6 @@ if(turntableMode) {
         if(!atmosphereReady||!rockMeshes.length) throw Error('Wait for the sky and specimen to load.');
         scene.background.set(0);
         scene.fog=null;
-        dome.visible=false;
         landscape.visible=false;
         skyFill.visible=false;
         const split=state.form===1;

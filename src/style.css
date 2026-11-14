@@ -24,15 +24,14 @@ body, h2, p { margin: 0; }
 #viewport {
   position: relative;
   overflow: hidden;
-  width: min(100cqw, calc(100cqh * 1.264));
-  aspect-ratio: 4022 / 3182;
-  background: #536861;
+  width: 100%;
+  height: 100%;
+  background: #33362e;
 }
-.stage[data-mode="specimen"] #viewport { width: 100%; height: 100%; aspect-ratio: auto; }
 #viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-.stage[data-mode="specimen"] canvas { cursor: grab; }
+#viewport canvas { cursor: grab; }
 #viewport canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-.stage[data-mode="specimen"] canvas:active { cursor: grabbing; }
+#viewport canvas:active { cursor: grabbing; }
 #status {
   position: absolute;
   bottom: 14px;
@@ -45,7 +44,7 @@ body, h2, p { margin: 0; }
   font-variant-numeric: tabular-nums;
 }
 #status:empty { display: none; }
-.toolbar, .pass, .view-actions, .row, .seed, .switch, .exports { display: flex; align-items: center; gap: 8px; }
+.toolbar, .pass, .view-actions, .row, .seed, .exports { display: flex; align-items: center; gap: 8px; }
 .toolbar { justify-content: space-between; padding: 8px 14px; border-top: 1px solid var(--line); }
 #hint { font-size: 12px; color: var(--muted); text-align: center; }
 .pass { color: var(--muted); }
@@ -56,10 +55,6 @@ aside { display: grid; grid-template-rows: minmax(0, 1fr) auto; background: var(
 h2 { font-size: 13px; font-weight: 650; margin-bottom: 8px; }
 .row { justify-content: space-between; min-height: 42px; }
 .row:last-child { margin-bottom: -4px; }
-.switch { padding: 3px; background: var(--stage); border-radius: 8px; margin-bottom: 12px; gap: 3px; }
-.switch button { flex: 1; border-color: transparent; background: transparent; }
-.switch button[aria-pressed="true"] { border-color: var(--line); background: var(--raised); color: var(--accent); }
-.switch button[aria-pressed="false"] { color: var(--muted); }
 button, select, input { font: inherit; color: inherit; }
 button, select, #seed {
   border: 1px solid var(--line);
@@ -72,7 +67,7 @@ button {
   cursor: pointer;
   transition: background-color 120ms ease, transform 130ms var(--ease-out);
 }
-@media (hover: hover) { button:hover:not(:disabled), .switch button:hover { background-color: var(--raised); } }
+@media (hover: hover) { button:hover:not(:disabled) { background-color: var(--raised); } }
 button:active:not(:disabled) { transform: scale(.97); }
 button:disabled { color: var(--muted); opacity: .63; cursor: default; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -116,7 +111,7 @@ output { color: var(--muted); font-variant-numeric: tabular-nums; }
 @media (max-width: 820px) {
   .studio { display: block; height: auto; }
   .picture { display: block; container-type: normal; }
-  #viewport, .stage[data-mode="specimen"] #viewport { width: 100%; height: auto; aspect-ratio: 4022 / 3182; }
+  #viewport { width: 100%; height: auto; aspect-ratio: 4 / 3; }
   aside { display: block; border: 0; border-top: 1px solid var(--line); }
   .inspector { overflow: visible; }
 }
@@ -126,6 +121,6 @@ output { color: var(--muted); font-variant-numeric: tabular-nums; }
 .stage.expanded { position: fixed; inset: 0; z-index: 3; }
 .stage.expanded .picture { display: grid; container-type: size; }
 .stage.expanded #viewport { width: min(100cqw, calc(100cqh * 1.264)); height: auto; }
-.stage.expanded[data-mode="specimen"] #viewport { width: 100%; height: 100%; }
+.stage.expanded #viewport { width: 100%; height: 100%; }
 
 

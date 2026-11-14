@@ -12,7 +12,7 @@
     <div class="picture"><div id="viewport"><p id="status" role="status">Loading rock engine…</p></div></div>
     <div class="toolbar">
       <label class="pass"><span>View</span><select id="view"><option value="material">Material</option><option value="clay">Clay</option><option value="normal">Normals</option><option value="wire">Wireframe</option><option value="moss">Moss</option><option value="wet">Wetness</option><option value="lichen">Lichen</option><option value="snow" hidden>Snow mask</option><option value="roughness">Roughness</option><option value="ao">AO mask</option></select></label>
-      <span id="hint">Fixed painting camera</span>
+      <span id="hint">Drag to orbit · Scroll to zoom</span>
       <div class="view-actions">
         <button id="reset" aria-label="Reset camera" title="Reset camera"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7.4M3 5v6h6"/></svg></button>
         <button id="fullscreen" aria-label="Expand preview" title="Expand preview" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4m-4 12h4v-4M8 20H4v-4"/></svg></button>
@@ -21,12 +21,11 @@
   </section>
   <aside aria-label="Rock controls">
     <div class="inspector">
-      <section aria-label="Composition">
-        <div class="switch" role="group" aria-label="Composition"><button id="scene" aria-pressed="true">Painting scene</button><button id="specimen" aria-pressed="false">Specimen</button></div>
+      <section aria-label="Rock">
         <label class="row" id="form-row">Rock type<select id="form"><optgroup label="Fjord rocks"><option value="0">Overhang</option><option value="1">Split boulder</option><option value="2">Upright slab</option><option value="3">Path stone</option></optgroup><optgroup id="volcanic-forms" label="Volcanic rocks"></optgroup><optgroup id="geology-forms" label="Rock specimens"></optgroup></select></label>
         <form id="seed-form"><label for="seed">Seed</label><div class="seed"><input id="seed" maxlength="96" autocomplete="off" spellcheck="false"><button>Apply</button><button type="button" id="shuffle" aria-label="Randomize seed" title="Randomize seed"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h.01m6 0h.01m-3 3h.01m-3 3h.01m6 0h.01"/></svg></button></div></form>
         <button type="button" id="randomize" class="randomize" title="Roll a new rock: type, seed, climate and weathering (R)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>Randomize</button>
-        <label class="row">Mesh detail<select id="detail"><option value="32">Draft</option><option value="54" selected>Detailed</option><option value="88">Fine</option><option value="144">Ultra</option></select></label>
+        <label class="row">Mesh detail<select id="detail"><option value="32">Draft</option><option value="54">Detailed</option><option value="88">Fine</option><option value="144" selected>Ultra</option></select></label>
       </section>
       <section>
         <h2>Weathering</h2>
@@ -34,7 +33,7 @@
         <label class="row">Climate<select id="climate"><option value="alpine">Alpine</option><option value="maritime">Maritime</option><option value="continental">Continental</option></select></label>
       </section>
       <section><h2>Surface</h2><div id="surface-controls"></div></section>
-      <section><h2>Lighting and terrain</h2><div id="scene-controls"></div></section>
+      <section><h2>Lighting</h2><div id="scene-controls"></div></section>
     </div>
     <div class="exports" role="group" aria-label="Export"><button id="png" disabled title="Supersampled still with a 3,840 pixel long edge">Render 4K PNG</button><button id="glb" disabled>Export rock GLB</button></div>
   </aside>

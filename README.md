@@ -4,10 +4,7 @@
 
 **Fjord Stone** is a procedural rock studio that runs in the browser. Rust evaluates signed distance fields, cuts joints, carves eroded relief and extracts indexed meshes with surface masks. A Web Worker runs the generator as WebAssembly, and Three.js lights and renders the result in WebGL 2.
 
-It has two modes:
-
-- **Painting scene:** a fixed-camera fjord shoreline with a lake, grass and pebbles under a physically based sky.
-- **Specimen:** a single rock you can orbit, chosen from 13 types.
+You orbit a single rock, chosen from 13 types, under a physically based sky. Meshes build at **Ultra** detail by default.
 
 ## Rock types
 
@@ -20,13 +17,13 @@ Each rock type sets its own shape and its geological features: bedding, cleavage
 ## Controls
 
 - **Rock type, seed and mesh detail.** The dice button next to the seed rolls a new seed.
-- **Randomize** (or the **R** key) rolls a whole new rock. In specimen mode it picks a random rock type. In both modes it sets a new seed, climate, elapsed years and sun angle, with weathering and surface values drawn around that rock type's defaults.
+- **Randomize** (or the **R** key) rolls a whole new rock: a random rock type, seed, climate, elapsed years and sun angle, with weathering and surface values drawn around that rock type's defaults.
 - **Weathering:** elapsed years under a simulated alpine, maritime or continental climate, surface weathering, joint opening and erosion carving.
-- **Surface:** moss, moisture, lichen, snow (specimen mode) and ambient occlusion.
+- **Surface:** moss, moisture, lichen, snow and ambient occlusion. The rock's fine grain relief fades out on smooth, glossy and wet areas and never shows through moss or lichen.
 - **View:** material, clay, normals, wireframe, and masks for moss, wetness, lichen, snow, roughness and AO.
 - **Render 4K PNG** saves the current view with a 3,840-pixel long edge. **Export rock GLB** saves the generated meshes with normals and vertex colours.
 
-In specimen mode, drag to orbit, scroll or pinch to zoom, and right-drag to pan.
+Drag to orbit, scroll or pinch to zoom, and right-drag to pan. Mesh detail can be lowered to Fine, Detailed or Draft on slower devices.
 
 GLB export keeps vertex colours only, so the per-pixel detail of the specimen stones is not included.
 
