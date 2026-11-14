@@ -1,0 +1,766 @@
+import './style.css';
+import * as T from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+import {paintingAspect,paintingCamera,paintingObjects,projectPaintingRock} from './layout.js';
+import {makeLandscape,makePebbles} from './landscape.js';
+import {loadAtmosphere,makeSky,setSkySun} from './atmosphere.js';
+import surfaceDetail from './surface-detail.glsl?raw';
+import geologyDetail from './geology-detail.glsl?raw';
+import {seeded} from './random.js';
+import {makeCameraLut,lutSize} from './camera-lut.js';
+import {renderStill} from './still.js';
+import {simulateClimate} from './climate.js';
+import fjordPresets from '../engine/src/presets.json';
+import {volcanicPresets} from './volcanic.js';
+import {geologyPresets} from './geology.js';
+
+const el=id=>document.getElementById(id);
+const viewport=el('viewport');
+const presets=[...fjordPresets];
+for(const [group,entries] of [['volcanic',volcanicPresets],['geology',geologyPresets]]) {
+    for(const preset of entries) {
+        el(group+'-forms').append(new Option(preset.name,String(presets.length)));
+        presets.push({...preset,group});
+    }
+}
+// Offset shared by the shader and the engine so per-pixel features match the mesh.
+const seedAnchor=seed=>{const r=seeded(seed);return [r()*37,r()*37,r()*37];};
+const specimenPreset=()=>state.scene||!presets[state.form].group?undefined:presets[state.form];
+const params=new URLSearchParams(location.search);
+const turntableMode=params.has('turntable')&&params.get('mode')==='specimen';
+const state={
+    scene:params.get('mode')!=='specimen',
+    form:T.MathUtils.clamp(Math.floor(Number(params.get('form'))||0),0,presets.length-1),
+    seed:params.get('seed')?.slice(0,96)||'painting',
+    years:0,climate:'alpine',grass:1,light:34,view:'material',ao:0.82,snow:params.get('weather')==='snow'?.82:0
+};
+if(!state.scene && !params.has('seed')) state.seed=presets[state.form].seed;
+const fields=[
+    ['years','Elapsed years',0,1000,1],['weather','Surface weathering',0,.55,.005],
+    ['fracture','Joint opening',0,.19,.001],['carving','Erosion carving',0,1,.01],
+    ['ao','Ambient occlusion',0,1,.01],['snow','Snow cover',0,1,.01],['moss','Moss',0,1,.01],['wet','Surface moisture',0,1,.01],['lichen','Lichens',0,1,.01],
+    ['grass','Grass density',0,1.65,.05],['light','Sun elevation',10,70,1]
+];
+function makeRenderer() {
+    try {
+        return new T.WebGLRenderer({antialias:true,preserveDrawingBuffer:true,powerPreference:'high-performance'});
+    } catch(error) {
+        el('status').textContent='The preview needs a browser with WebGL 2 enabled.';
+        throw error;
+    }
+}
+const renderer=makeRenderer();
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=T.PCFShadowMap;
+renderer.toneMapping=T.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.05;
+renderer.domElement.setAttribute('aria-label','Interactive three-dimensional rock preview');
+viewport.prepend(renderer.domElement);
+const scene=new T.Scene();
+scene.background=new T.Color(0x536861);
+scene.fog=new T.FogExp2(0x687e75,0.011);
+const camera=new T.PerspectiveCamera(42,paintingAspect,0.045,330);
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.minDistance=1.9;
+controls.maxDistance=16;
+controls.enableDamping=false;
+controls.addEventListener('change',render);
+const pmrem=new T.PMREMGenerator(renderer);
+const room=new RoomEnvironment();
+const environment=pmrem.fromScene(room,0.12);
+scene.environment=environment.texture;
+scene.environmentIntensity=0.26;
+room.dispose();
+pmrem.dispose();
+const skyFill=new T.HemisphereLight(0xc9dfe8,0x5e573c,0.85);
+scene.add(skyFill);
+const sun=new T.DirectionalLight(0xffe1ae,2.65);
+sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.normalBias=0.018;
+sun.shadow.bias=-0.00013;
+sun.shadow.radius=2.3;
+scene.add(sun,sun.target);
+const dome=makeSky();
+dome.visible=false;
+scene.add(dome);
+let atmosphereReady=false;
+const atmosphereLoad=loadAtmosphere().then(()=>{
+    atmosphereReady=true;
+    dome.visible=state.scene;
+    landscape?.traverse(object=>{if(object.name==='Lake')object.visible=true;});
+    render();
+}).catch(error=>{
+    console.error(error);
+    el('status').textContent='Sky and water are unavailable. Reload the page to retry.';
+});
+
+const rockGroup=new T.Group();
+scene.add(rockGroup);
+let landscape,pebbles,worker,jobId=0,jobs=[],rockMeshes=[],transforms=[],rockTimer,grassTimer;
+let exposureHistory,historyKey;
+const aoAmount={value:state.ao};
+const snowAmount={value:0};
+const rockGrain={value:1};
+const crystalline={value:0};
+const bedded={value:0};
+const stoneType={value:0};
+const rockSeed={value:new T.Vector3()};
+const rockMapAmount={value:1};
+const rockLightDirection={value:new T.Vector3()};
+const cameraLutStrength={value:0};
+const cameraLut={value:turntableMode?makeCameraLut():null};
+const reliefSize=448;
+const surfaceTexture=new T.DataTexture(new Uint8Array([128,0,0,128]),1,1);
+surfaceTexture.wrapS=surfaceTexture.wrapT=T.RepeatWrapping;
+surfaceTexture.magFilter=T.LinearFilter;
+surfaceTexture.minFilter=T.LinearMipmapLinearFilter;
+surfaceTexture.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+surfaceTexture.generateMipmaps=true;
+surfaceTexture.needsUpdate=true;
+const surfaceLoad=fetch(import.meta.env.BASE_URL+'surface/relief-448.rgba').then(async response=>{
+    if(!response.ok) throw Error('Rock surface map could not load.');
+    const data=new Uint8Array(await response.arrayBuffer());
+    if(data.length!==reliefSize*reliefSize*4) throw Error('Incomplete rock surface map.');
+    surfaceTexture.image={data,width:reliefSize,height:reliefSize};
+    surfaceTexture.needsUpdate=true;
+}).catch(error=>console.error(error));
+
+const baseMaterial=new T.MeshPhysicalMaterial({vertexColors:true,roughness:1,clearcoat:1,clearcoatRoughness:0.28});
+baseMaterial.defaultAttributeValues={meshWeather:[0,1]};
+baseMaterial.onBeforeCompile=shader=>{
+    shader.uniforms.rockGrain=rockGrain;
+    shader.uniforms.crystalline=crystalline;
+    shader.uniforms.bedded=bedded;
+    shader.uniforms.stoneType=stoneType;
+    shader.uniforms.rockSeed=rockSeed;
+    shader.uniforms.snowAmount=snowAmount;
+    shader.uniforms.aoAmount=aoAmount;
+    shader.uniforms.rockLightDirection=rockLightDirection;
+    shader.uniforms.rockMapAmount=rockMapAmount;
+    shader.uniforms.rockSurfaceMap={value:surfaceTexture};
+    shader.vertexShader=`attribute vec4 surfaceData; attribute float fresh; attribute float edgeTransmission; attribute vec2 meshWeather; attribute float rockAO;
+        varying vec4 vSurface; varying vec3 vRockPoint; varying vec3 vRockNormal; varying float vFresh;
+        varying float vEdgeTransmission; varying vec2 vMeshWeather; varying float vRockAO; varying mat3 vRockNormalMatrix;
+        `+shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
+            vSurface=surfaceData; vRockPoint=position; vRockNormal=normal; vFresh=fresh; vEdgeTransmission=edgeTransmission; vMeshWeather=meshWeather; vRockAO=rockAO; vRockNormalMatrix=normalMatrix;`);
+    shader.fragmentShader=`varying float vEdgeTransmission; varying vec2 vMeshWeather; varying float vRockAO;
+        varying mat3 vRockNormalMatrix;
+        uniform vec3 rockLightDirection; uniform float snowAmount; uniform float aoAmount; uniform float crystalline;
+        `+surfaceDetail+geologyDetail+shader.fragmentShader
+        .replace('#include <color_fragment>',`#include <color_fragment>
+            float footprint=max(length(dFdx(vRockPoint)),length(dFdy(vRockPoint)));
+            vec4 rockMap=surfaceMap(vRockPoint,vRockNormal);
+            float granitePolish=0., graniteRoughness=1., graniteBoundary=1., laminaRelief=0., stoneSmooth=0., stoneRelief=0.;
+            vec3 stoneSpecular=vec3(1.);
+            vec3 graniteTilt=vec3(0.);
+            bool perPixelStone=crystalline>0.||stoneType>2.5;
+            if(stoneType>2.5){
+                Stone stone;
+                if(stoneType<3.5) stone=marbleStone(vRockPoint,footprint,clamp((.62-vSurface.x-.21*vSurface.y)/.2,0.,1.));
+                else if(stoneType<4.5) stone=slateStone(vRockPoint,vEdgeTransmission,footprint);
+                else if(stoneType<5.5) stone=conglomerateStone(vRockPoint,footprint);
+                else stone=schistStone(vRockPoint,vEdgeTransmission,footprint);
+                diffuseColor.rgb=mix(stone.albedo,vec3(.064,.076,.029),vSurface.z)*(1.-.44*vSurface.y-.16*vFresh);
+                graniteRoughness=stone.roughness; graniteTilt=stone.tilt; stoneSmooth=stone.smoothness; stoneSpecular=stone.specular; stoneRelief=stone.relief;
+            }
+            if(crystalline>0.){
+                granitePolish=clamp(vEdgeTransmission,0.,1.);
+                Mineral mineral=graniteFabric(vRockPoint,footprint,granitePolish);
+                // Same moss and wetting the engine applies to the vertex colour.
+                diffuseColor.rgb=mix(mineral.albedo,vec3(.064,.076,.029),vSurface.z)
+                    *(1.-.44*vSurface.y-.16*vFresh);
+                graniteRoughness=mineral.roughness; graniteTilt=mineral.tilt; graniteBoundary=mineral.boundary;
+            }
+            if(bedded>0.){
+                vec4 lamina=sandstoneLaminae(vEdgeTransmission,vRockPoint);
+                diffuseColor.rgb*=lamina.rgb;
+                laminaRelief=lamina.a;
+            }
+            float flake=filteredGrain(vRockPoint,34.,footprint);
+            float grit=filteredGrain(vRockPoint,102.,footprint);
+            float micro=filteredGrain(vRockPoint,230.,footprint);
+            vec2 colony=vec2(0.);
+            if(vSurface.w>.07 && vFresh<.97) colony=lichenColony(vRockPoint,footprint);
+            colony.x*=vMeshWeather.y;
+            float snow=0.;
+            if(snowAmount>0.){
+                float coverage=vMeshWeather.x*snowAmount;
+                float edge=.24+.22*rockNoise(vRockPoint*12.)+.16*rockNoise(vRockPoint*31.);
+                snow=smoothstep(edge-.07,edge+.17,coverage);
+                snow*=smoothstep(.28,.64,normalize(vRockNormal).y);
+            }
+            float smoothFacet=max(crystalline*granitePolish,stoneSmooth);
+            float mineralRelief=(.38*flake+.155*grit+.058*micro)*rockGrain*mix(1.,.14,smoothFacet);
+            float mapRelief=((rockMap.r-.5)*.21+(rockMap.a-.5)*.14)*rockMapAmount*mix(1.,.08,smoothFacet);
+            float relief=mix(mineralRelief+mapRelief+.24*colony.x+laminaRelief*bedded+stoneRelief-.20*crystalline*(1.-graniteBoundary),flake*.17+grit*.095,snow);
+            diffuseColor.rgb*=1.+(mineralRelief+mapRelief)*mix(.44,.73,vSurface.z);
+            diffuseColor.rgb*=1.+rockMapAmount*(rockMap.b*.13-rockMap.g*.085);
+            vec3 lichenColor=mix(vec3(.245,.275,.205),vec3(.395,.355,.21),colony.y);
+            lichenColor*=1.+.52*grit;
+            diffuseColor.rgb=mix(diffuseColor.rgb,lichenColor,colony.x*.74);
+            diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.76,.84,.89)*(1.+.12*grit),snow);`)
+        .replace('#include <roughnessmap_fragment>',`#include <roughnessmap_fragment>
+            float rockRoughness=perPixelStone?graniteRoughness-.21*vSurface.y+.16*mineralRelief*(1.-smoothFacet):vSurface.x+.16*mineralRelief;
+            roughnessFactor=mix(clamp(rockRoughness,.06,1.),.96,max(colony.x*.88,snow));`)
+        .replace('#include <normal_fragment_maps>',`#include <normal_fragment_maps>
+            vec3 dpdx=dFdx(-vViewPosition);
+            vec3 dpdy=dFdy(-vViewPosition);
+            vec3 r1=cross(dpdy,normal);
+            vec3 r2=cross(normal,dpdx);
+            float det=dot(dpdx,r1);
+            float bump=(.015+.011*vSurface.z)*max(length(dpdx),length(dpdy))/max(footprint,1e-5);
+            vec3 gradient=(dFdx(relief)*r1+dFdy(relief)*r2)*bump*sign(det);
+            normal=normalize(max(abs(det),1e-9)*normal-gradient);
+            if(perPixelStone){
+                vec3 tilt=vRockNormalMatrix*graniteTilt*(1.-max(colony.x,snow));
+                normal=normalize(normal+tilt-dot(tilt,normal)*normal);
+            }`)
+        .replace('#include <lights_physical_fragment>',`#include <lights_physical_fragment>
+            material.clearcoat *= smoothstep(.26,.89,vSurface.y)*(1.-.91*vSurface.z)*(1.-.88*colony.x)*(1.-.95*snow);
+            material.clearcoatRoughness = mix(.43,.23,vSurface.y);
+            // Dusty specimen surfaces reflect less than a clean dielectric.
+            material.specularColor*=mix(stoneSpecular,vec3(1.),max(vSurface.y,snow));
+            material.specularF90*=mix(dot(stoneSpecular,vec3(1./3.)),1.,max(vSurface.y,snow));`)
+        .replace('#include <aomap_fragment>',`#include <aomap_fragment>
+            float sdfAO=mix(1.,vRockAO,aoAmount);
+            reflectedLight.indirectDiffuse*=sdfAO;
+            #ifdef USE_CLEARCOAT
+                clearcoatSpecularIndirect*=sdfAO;
+            #endif
+            #ifdef USE_ENVMAP
+                reflectedLight.indirectSpecular*=computeSpecularOcclusion(
+                    saturate(dot(geometryNormal,geometryViewDir)),sdfAO,material.roughness);
+            #endif`)
+        .replace('#include <emissivemap_fragment>',`#include <emissivemap_fragment>
+            vec3 viewDir=normalize(vViewPosition);
+            vec3 lightDir=normalize(mat3(viewMatrix)*rockLightDirection);
+            float rim=pow(1.-clamp(dot(normal,viewDir),0.,1.),2.1);
+            float back=smoothstep(.06,.83,-dot(normal,lightDir));
+            float towardViewer=smoothstep(-.35,.74,-dot(lightDir,viewDir));
+            // Only glass and marble carry a transmission signal; other stones reuse the channel.
+            float carriesTransmission=(1.-max(crystalline,bedded))*(stoneType>3.5?0.:1.);
+            float tint=vEdgeTransmission*carriesTransmission*rim*(.15+.82*back*towardViewer);
+            totalEmissiveRadiance+=(stoneType>2.5?vec3(.62,.58,.50)*.55:vec3(.63,.177,.054))*tint;
+            // Marble scatters light under the surface: lift its shadows with a warm glow.
+            if(stoneType>2.5&&stoneType<3.5) totalEmissiveRadiance+=diffuseColor.rgb*vec3(1.,.92,.80)*.10*(1.-max(colony.x,snow));`);
+    if(turntableMode){
+        shader.uniforms.cameraLut=cameraLut;
+        shader.uniforms.cameraLutStrength=cameraLutStrength;
+        shader.fragmentShader=`uniform highp sampler3D cameraLut;
+            uniform float cameraLutStrength;
+            `+shader.fragmentShader.replace('#include <colorspace_fragment>',`#include <colorspace_fragment>
+                vec3 lutCoord=(clamp(gl_FragColor.rgb,0.,1.)*${lutSize-1}.+.5)/${lutSize}.;
+                gl_FragColor.rgb=mix(gl_FragColor.rgb,texture(cameraLut,lutCoord).rgb,cameraLutStrength);`);
+    }
+};
+const clay=new T.MeshStandardMaterial({color:0xafa58d,roughness:0.88});
+const normals=new T.MeshNormalMaterial();
+const wire=new T.MeshBasicMaterial({color:0xb9ad8e,wireframe:true});
+const mask=new T.ShaderMaterial({
+    uniforms:{channel:{value:0}},
+    defaultAttributeValues:{meshWeather:[0,1]},
+    vertexShader:`attribute vec4 surfaceData; attribute float fresh; attribute vec2 meshWeather; attribute float rockAO;
+        varying vec4 vSurface; varying vec3 vRockPoint; varying vec3 vRockNormal; varying float vFresh;
+        varying vec2 vMeshWeather; varying float vRockAO;
+        void main(){
+            vSurface=surfaceData;vRockPoint=position;vRockNormal=normal;vFresh=fresh;vMeshWeather=meshWeather; vRockAO=rockAO;
+            vec4 point=vec4(position,1.);
+            #ifdef USE_INSTANCING
+                point=instanceMatrix*point;
+            #endif
+            gl_Position=projectionMatrix*modelViewMatrix*point;
+        }`,
+    fragmentShader:`uniform int channel; varying vec2 vMeshWeather; varying float vRockAO; ${surfaceDetail}
+        void main(){
+            float m=channel==5?vRockAO:channel==4?vMeshWeather.x:vSurface[min(channel,3)];
+            if(channel==3) {
+                float footprint=max(length(dFdx(vRockPoint)),length(dFdy(vRockPoint)));
+                m=lichenColony(vRockPoint,footprint).x*vMeshWeather.y;
+            }
+            gl_FragColor=vec4(vec3(m),1.);
+        }`
+});
+
+function render() {renderer.render(scene,camera);}
+function cameraReset() {
+    const p=presets[state.form];
+    if(state.scene) {
+        camera.position.set(...paintingCamera.eye);
+        controls.target.set(...paintingCamera.aim);
+        camera.fov=T.MathUtils.radToDeg(2*Math.atan(1/paintingCamera.zoom));
+    } else {
+        controls.target.set(0,Math.max(0.45,p.height),0);
+        camera.position.copy(controls.target).add(new T.Vector3(
+            Math.sin(p.azimuth)*5.35,Math.sin(p.elevation)*5.35,Math.cos(p.azimuth)*5.35));
+        camera.fov=40;
+    }
+    controls.enabled=!state.scene;
+    renderer.domElement.style.touchAction=state.scene?'auto':'none';
+    renderer.domElement.tabIndex=state.scene?-1:0;
+    renderer.domElement.setAttribute('aria-label',state.scene?'Painting scene preview':'Rock preview. Arrow keys orbit. Plus and minus zoom.');
+    scene.background.set(state.scene?0x536861:0x33362e);
+    scene.fog.color.set(state.scene?0x687e75:0x33362e);
+    dome.visible=state.scene&&atmosphereReady;
+    const type=specimenPreset()?.seed;
+    const glass=type==='glass-buttes';
+    const granite=type==='st-cloud-granite';
+    crystalline.value=Number(granite);
+    bedded.value=Number(type==='red-rock-canyon');
+    stoneType.value={'vermont-marble':3,'bangor-slate':4,'oligomict-conglomerate':5,'mica-schist':6}[type]||0;
+    rockSeed.value.set(...seedAnchor(state.seed));
+    const fine={'vermont-marble':[.35,.20],'bangor-slate':[.30,.20],'oligomict-conglomerate':[.6,.5],'mica-schist':[.45,.35],'red-rock-canyon':[.78,.55]}[type];
+    rockGrain.value=glass?.12:fine?.[0]??1;
+    rockMapAmount.value=glass?.075:fine?.[1]??1;
+    scene.environmentIntensity=glass?.92:granite?.76:state.scene?.26:.45;
+    baseMaterial.ior=glass?1.49:granite?1.54:1.50;
+    camera.aspect=state.scene?paintingAspect:viewport.clientWidth/Math.max(viewport.clientHeight,1);
+    camera.updateProjectionMatrix();
+    controls.update();
+    render();
+}
+function lights() {
+    const angle=state.scene?2.46:presets[state.form].sun;
+    const elev=T.MathUtils.degToRad(state.light);
+    const direction=new T.Vector3(Math.cos(angle)*Math.cos(elev),Math.sin(elev),Math.sin(angle)*Math.cos(elev));
+    setSkySun(direction);
+    rockLightDirection.value.copy(direction);
+    sun.target.position.set(0,0,state.scene?-9:0);
+    sun.position.copy(sun.target.position).addScaledVector(direction,18);
+    const span=state.scene?15:4;
+    Object.assign(sun.shadow.camera,{left:-span,right:span,top:span,bottom:-span,near:1,far:48});
+    sun.shadow.camera.updateProjectionMatrix();
+    sun.color.set(0xffe4bd).lerp(new T.Color(0xffbf76),1-T.MathUtils.smoothstep(state.light,10,42));
+    render();
+}
+function dispose(group) {
+    const geometries=new Set(),materials=new Set();
+    group.traverse(o=>{
+        if(o.isInstancedMesh) o.dispose();
+        if(o.geometry) geometries.add(o.geometry);
+        if(o.material) materials.add(o.material);
+    });
+    for(const g of geometries) g.dispose();
+    for(const m of materials) {
+        m.normalMap?.dispose();
+        m.dispose();
+    }
+    group.removeFromParent();
+}
+function landscapeUpdate() {
+    if(landscape) dispose(landscape);
+    if(state.scene) {
+        landscape=makeLandscape(state.seed,state.grass);
+        landscape.getObjectByName('Lake').visible=atmosphereReady;
+    }
+    else {
+        landscape=new T.Group();
+        const floor=new T.Mesh(new T.PlaneGeometry(160,160),new T.MeshStandardMaterial({color:0x434438,roughness:0.96}));
+        floor.rotation.x=-Math.PI/2;
+        floor.receiveShadow=true;
+        landscape.add(floor);
+    }
+    scene.add(landscape);
+    render();
+}
+function options(form) {
+    const p=presets[form], key=state.seed+'/'+state.climate;
+    if(key!==historyKey) {
+        exposureHistory=simulateClimate(state.seed,state.climate);
+        historyKey=key;
+    }
+    return [
+        state.scene?p.weather*state.weather/0.15:state.weather,p.rounding,
+        state.scene?p.fracture*state.fracture/0.08:state.fracture,state.carving,
+        state.scene?p.moss*state.moss/0.34:state.moss,state.wet,state.lichen,
+        1-Math.exp(-exposureHistory.runoff[state.years]/16700),1-Math.exp(-exposureHistory.frost[state.years]/5700),
+        ...seedAnchor(state.seed)
+    ];
+}
+function asGeometry({vertices,indices,weather}) {
+    const geometry=new T.BufferGeometry();
+    const packed=new T.InterleavedBuffer(vertices,16);
+    for(const [name,size,offset] of [['position',3,0],['normal',3,3],['color',3,6],['surfaceData',4,9],['fresh',1,13],['edgeTransmission',1,14],['rockAO',1,15]]) {
+        geometry.setAttribute(name,new T.InterleavedBufferAttribute(packed,size,offset));
+    }
+    if(weather) geometry.setAttribute('meshWeather',new T.BufferAttribute(weather,2));
+    geometry.setIndex(new T.BufferAttribute(indices,1));
+    geometry.computeBoundingSphere();
+    return geometry;
+}
+function currentMaterial() {
+    if(state.view==='material') return baseMaterial;
+    if(state.view==='clay') return clay;
+    if(state.view==='normal') return normals;
+    if(state.view==='wire') return wire;
+    mask.uniforms.channel.value={roughness:0,wet:1,moss:2,lichen:3,snow:4,ao:5}[state.view];
+    return mask;
+}
+function updateView() {
+    const material=currentMaterial();
+    rockGroup.traverse(object=>{if(object.isMesh)object.material=material;});
+    pebbles?.traverse(object=>{if(object.isMesh)object.material=material;});
+    landscape.visible=state.view==='material'||state.view==='clay';
+    render();
+}
+function generate() {
+    clearTimeout(rockTimer);
+    worker?.terminate();
+    window.fjordReady=null;
+    worker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
+    const id=++jobId;
+    el('status').textContent='Building rock meshes…';
+    el('glb').disabled=true;
+    el('png').disabled=true;
+    const detail=turntableMode?160:Number(el('detail').value);
+    jobs=state.scene?paintingObjects(state.seed).map((job,index)=>({...job,
+        resolution:index<6?detail:(index<18?Math.max(22,Math.round(detail*0.58)):Math.max(13,Math.round(detail*0.31))),
+        options:options(job.form)
+    })):[{form:state.form,seed:state.seed,resolution:detail,options:options(state.form),meshWeather:!turntableMode}];
+    let incoming=[];
+    worker.onmessage=({data})=>{
+        if(data.id!==jobId)return;
+        if(data.error){
+            el('status').textContent=data.error;
+            worker.terminate();
+            worker=undefined;
+            return;
+        }
+        if(!data.done) {
+            incoming[data.index]=data;
+            el('status').textContent=`Building rocks · ${data.index+1} / ${jobs.length}`;
+            return;
+        }
+        pebbles?.traverse(object=>{if(object.isInstancedMesh)object.dispose();});
+        for(const child of rockGroup.children) child.geometry.dispose();
+        rockGroup.clear();
+        pebbles?.removeFromParent();
+        pebbles=undefined;
+        rockMeshes=[];
+        transforms=[];
+        for(const [index,item] of incoming.entries()) {
+            const job=jobs[index],mesh=new T.Mesh(asGeometry(item),currentMaterial());
+            mesh.name=job.seed;
+            mesh.castShadow=true;
+            mesh.receiveShadow=true;
+            if(job.placement) {
+                const p=projectPaintingRock(item.bounds,...job.placement);
+                transforms[index]=p;
+                mesh.scale.set(...p.scale);
+                mesh.rotation.y=p.yaw;
+                const center=new T.Vector3(...p.center).multiply(mesh.scale).applyAxisAngle(new T.Vector3(0,1,0),p.yaw);
+                mesh.position.set(...p.foot).sub(center);
+            }
+            rockGroup.add(mesh);
+            rockMeshes[index]=mesh;
+        }
+        if(state.scene) {
+            pebbles=makePebbles(rockMeshes,transforms,state.seed);
+            scene.add(pebbles);
+        }
+        incoming=[];
+        worker.terminate();
+        worker=undefined;
+        el('status').textContent='';
+        el('glb').disabled=false;
+        el('png').disabled=false;
+        updateView();
+        window.fjordReady={meshes:rockMeshes.length,triangles:rockMeshes.reduce((sum,m)=>sum+m.geometry.index.count/3,0)};
+        document.dispatchEvent(new Event('fjord:ready'));
+    };
+    worker.onerror=event=>{el('status').textContent=event.message||'The mesh worker could not start.';};
+    worker.postMessage({id,jobs});
+}
+function updateUrl() {
+    const query=new URLSearchParams({mode:state.scene?'painting':'specimen',form:state.form,seed:state.seed});
+    window.history.replaceState(null,'','?'+query);
+}
+function resetSurface() {
+    const p=presets[state.form];
+    Object.assign(state,{weather:state.scene?0.15:p.weather,fracture:state.scene?0.08:p.fracture,
+        carving:p.carving??0.52,moss:state.scene?0.34:p.moss,wet:p.wet??0.48,lichen:p.lichen??0.57});
+}
+function sync() {
+    el('scene').setAttribute('aria-pressed',state.scene);
+    el('specimen').setAttribute('aria-pressed',!state.scene);
+    el('form-row').hidden=state.scene;
+    el('form').value=state.form;
+    el('seed').value=state.seed;
+    el('stage').dataset.mode=state.scene?'painting':'specimen';
+    el('hint').textContent=state.scene?'Fixed painting camera':'Drag to orbit · Scroll to zoom';
+    el('reset').hidden=state.scene;
+    el('view').querySelector('[value=snow]').hidden=state.scene||turntableMode;
+    if((state.scene||turntableMode)&&state.view==='snow'){
+        state.view='material';
+        el('view').value='material';
+    }
+    snowAmount.value=state.scene||turntableMode?0:state.snow;
+    for(const [key,,min,max] of fields) {
+        el(key).value=state[key];
+        sliderValue(key,min,max);
+        if(key==='grass') el(key).parentElement.hidden=!state.scene;
+        if(key==='snow') el(key).parentElement.hidden=state.scene||turntableMode;
+    }
+}
+function sliderValue(key,min,max) {
+    const value=state[key];
+    el(key).style.setProperty('--fill',100*(value-min)/(max-min)+'%');
+    el(key+'-value').value=key==='years'?value+' yr':key==='light'?value+'°':Math.round(value*100)+'%';
+}
+for(const [key,label,min,max,step] of fields) {
+    const row=document.createElement('div');
+    row.className='parameter';
+    row.innerHTML=`<label for="${key}">${label}</label><output id="${key}-value" for="${key}"></output><input type="range" id="${key}" min="${min}" max="${max}" step="${step}">`;
+    const section=['grass','light'].includes(key)?'scene':
+        ['moss','wet','lichen','snow','ao'].includes(key)?'surface':'weather';
+    el(section+'-controls').append(row);
+    el(key).addEventListener('input',()=>{
+        state[key]=Number(el(key).value);
+        sliderValue(key,min,max);
+        if(key==='light'){lights();return;}
+        if(key==='ao'){aoAmount.value=state.ao;render();return;}
+        if(key==='snow'){snowAmount.value=state.snow;render();return;}
+        if(key==='grass'){
+            clearTimeout(grassTimer);
+            grassTimer=setTimeout(landscapeUpdate,140);
+        }else{
+            clearTimeout(rockTimer);
+            rockTimer=setTimeout(generate,180);
+        }
+    });
+}
+function switchMode(painting) {
+    if(state.scene===painting)return;
+    state.scene=painting;
+    state.seed=painting?'painting':presets[state.form].seed;
+    el('detail').value=painting?'54':specimenPreset()?'88':el('detail').value;
+    resetSurface();sync();updateUrl();landscapeUpdate();cameraReset();lights();generate();
+}
+el('scene').onclick=()=>switchMode(true);
+el('specimen').onclick=()=>switchMode(false);
+el('form').onchange=()=>{
+    state.form=Number(el('form').value);
+    state.seed=presets[state.form].seed;
+    if(specimenPreset()) el('detail').value='88';
+    resetSurface();sync();updateUrl();cameraReset();lights();generate();
+};
+el('seed-form').onsubmit=event=>{
+    event.preventDefault();
+    state.seed=el('seed').value.trim()||(state.scene?'painting':presets[state.form].seed);
+    sync();updateUrl();landscapeUpdate();generate();
+};
+el('shuffle').onclick=()=>{
+    el('seed').value='fjord-'+crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
+    el('seed-form').requestSubmit();
+};
+// Roll a whole new rock. Surface values are drawn around the rock type's own
+// defaults, so clean specimens stay clean; view settings (AO, snow, grass,
+// mesh detail) are left alone.
+function randomize() {
+    const random=(min,max)=>min+(max-min)*Math.random();
+    const clamp=(key,value)=>{
+        const [, , min,max,step]=fields.find(field=>field[0]===key);
+        return Math.min(max,Math.max(min,Math.round(value/step)*step));
+    };
+    if(!state.scene) state.form=Math.floor(Math.random()*presets.length);
+    const p=presets[state.form];
+    state.seed=(state.scene?'painting':'stone')+'-'+crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
+    state.climate=['alpine','maritime','continental'][Math.floor(Math.random()*3)];
+    const base={weather:state.scene?.15:p.weather,fracture:state.scene?.08:p.fracture,carving:p.carving??.52,
+        moss:state.scene?.34:p.moss,wet:p.wet??.48,lichen:p.lichen??.57};
+    Object.assign(state,{
+        years:clamp('years',random(0,1000)),
+        weather:clamp('weather',base.weather*random(.45,1.9)),
+        fracture:clamp('fracture',base.fracture*random(.3,2.2)),
+        carving:clamp('carving',random(.15,.9)),
+        moss:clamp('moss',base.moss*random(0,2)),
+        wet:clamp('wet',base.wet*random(.3,1.8)),
+        lichen:clamp('lichen',base.lichen*random(0,2)),
+        light:clamp('light',random(18,58))
+    });
+    el('climate').value=state.climate;
+    if(specimenPreset()) el('detail').value='88';
+    sync();updateUrl();cameraReset();lights();
+    if(state.scene) landscapeUpdate();
+    generate();
+}
+el('randomize').onclick=randomize;
+document.addEventListener('keydown',event=>{
+    const typing=event.target.closest?.('input,select,textarea,[contenteditable]');
+    if(event.key.toLowerCase()==='r'&&!event.metaKey&&!event.ctrlKey&&!event.altKey&&!typing) randomize();
+});
+el('detail').onchange=generate;
+el('view').onchange=()=>{state.view=el('view').value;updateView();};
+el('climate').onchange=()=>{state.climate=el('climate').value;generate();};
+el('reset').onclick=cameraReset;
+renderer.domElement.addEventListener('keydown',event=>{
+    if(state.scene)return;
+    switch(event.key) {
+        case 'ArrowLeft': controls.rotateLeft(.10); break;
+        case 'ArrowRight': controls.rotateLeft(-.10); break;
+        case 'ArrowUp': controls.rotateUp(.10); break;
+        case 'ArrowDown': controls.rotateUp(-.10); break;
+        case '+': case '=': controls.dollyIn(.9); break;
+        case '-': controls.dollyOut(.9); break;
+        default: return;
+    }
+    event.preventDefault();
+});
+function setExpanded(expanded) {
+    el('stage').classList.toggle('expanded',expanded);
+    document.body.classList.toggle('preview-expanded',expanded);
+    el('fullscreen').setAttribute('aria-pressed',expanded);
+    el('fullscreen').setAttribute('aria-label',expanded?'Restore preview size':'Expand preview');
+    el('fullscreen').title=expanded?'Restore preview size':'Expand preview';
+    el('fullscreen').focus();
+}
+el('fullscreen').onclick=()=>setExpanded(!el('stage').classList.contains('expanded'));
+document.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&el('stage').classList.contains('expanded')) setExpanded(false);
+});
+function download(data,type,suffix,seed=state.seed) {
+    const url=URL.createObjectURL(new Blob([data],{type}));
+    const a=document.createElement('a');
+    a.href=url;
+    a.download='fjord-'+seed.replace(/[^a-z0-9-]/gi,'-')+suffix;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+el('png').onclick=async()=>{
+    const button=el('png');
+    button.disabled=true;
+    button.textContent='Rendering…';
+    try {
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        const seed=state.seed;
+        const png=await renderStill(renderer,scene,camera,sun.shadow);
+        download(png,'image/png','-4k.png',seed);
+    } catch(error) {
+        el('status').textContent=error.message;
+    } finally {
+        button.textContent='Render 4K PNG';
+        button.disabled=!window.fjordReady;
+    }
+};
+el('glb').onclick=async()=>{
+    const group=new T.Group();
+    for(const rock of rockMeshes) {
+        const copy=rock.clone();
+        copy.material=new T.MeshStandardMaterial({vertexColors:true,roughness:specimenPreset()?.seed==='glass-buttes'?0.18:0.84});
+        group.add(copy);
+    }
+    try {
+        const buffer=await new GLTFExporter().parseAsync(group,{binary:true});
+        download(buffer,'model/gltf-binary','.glb');
+    } catch(error) {
+        el('status').textContent=error.message;
+    } finally {
+        for(const child of group.children)child.material.dispose();
+    }
+};
+new ResizeObserver(()=>{
+    const {width,height}=viewport.getBoundingClientRect();
+    if(width<1||height<1)return;
+    renderer.setSize(width,height,false);
+    camera.aspect=state.scene?paintingAspect:width/height;
+    camera.updateProjectionMatrix();
+    render();
+}).observe(viewport);
+if(specimenPreset()) el('detail').value='88';
+if(turntableMode) el('detail').value='144';
+resetSurface();sync();landscapeUpdate();cameraReset();lights();
+Promise.all([atmosphereLoad,surfaceLoad]).then(generate);
+
+// The local batch renderer uses the same geometry, material and camera as the studio.
+if(turntableMode) {
+    let captureCanvas, captureContext, orbit;
+    window.prepareTurntable=(size=2160,samples=1.5)=>{
+        if(!atmosphereReady||!rockMeshes.length) throw Error('Wait for the sky and specimen to load.');
+        scene.background.set(0);
+        scene.fog=null;
+        dome.visible=false;
+        landscape.visible=false;
+        skyFill.visible=false;
+        const split=state.form===1;
+        const sunAzimuth=presets[state.form].azimuth-(split?1.02:.88);
+        const sunElevation=T.MathUtils.degToRad(split?29:34);
+        const sunDirection=new T.Vector3(
+            Math.sin(sunAzimuth)*Math.cos(sunElevation),
+            Math.sin(sunElevation),
+            Math.cos(sunAzimuth)*Math.cos(sunElevation)
+        );
+        setSkySun(sunDirection);
+        rockLightDirection.value.copy(sunDirection);
+        sun.color.set(0xffe9ce);
+        sun.intensity=split?2.35:2.55;
+        const skyScene=new T.Scene();
+        // The lower hemisphere models daylight reflected by open ground.
+        skyScene.add(makeSky(false,[.090,.101,.093]));
+        const generator=new T.PMREMGenerator(renderer);
+        const skyEnvironment=generator.fromScene(skyScene,.055,.1,240,{size:512});
+        scene.environment=skyEnvironment.texture;
+        scene.environmentIntensity=3.45;
+        generator.dispose();
+        for(const object of skyScene.children) {
+            object.geometry.dispose();
+            object.material.dispose();
+        }
+        renderer.toneMappingExposure=1.78;
+        cameraLutStrength.value=1;
+        renderer.setPixelRatio(1);
+        renderer.setSize(Math.round(size*samples),Math.round(size*samples),false);
+        const bounds=new T.Box3().setFromObject(rockGroup);
+        const center=bounds.getCenter(new T.Vector3());
+        sun.target.position.copy(center);
+        sun.position.copy(center).addScaledVector(sunDirection,18);
+        const span=bounds.getSize(new T.Vector3());
+        let horizontalRadius=0;
+        const position=rockMeshes[0].geometry.getAttribute('position');
+        for(let i=0;i<position.count;i++) {
+            horizontalRadius=Math.max(horizontalRadius,Math.hypot(position.getX(i)-center.x,position.getZ(i)-center.z));
+        }
+        const radius=Math.hypot(horizontalRadius,span.y*0.5);
+        orbit={
+            center,
+            distance:radius/Math.sin(T.MathUtils.degToRad(17))*(split?.91:1),
+            angle:presets[state.form].azimuth
+        };
+        camera.aspect=1;
+        camera.fov=38;
+        camera.updateProjectionMatrix();
+        const shadowSize=Math.min(4096,renderer.capabilities.maxTextureSize);
+        sun.shadow.mapSize.set(shadowSize,shadowSize);
+        sun.shadow.map?.dispose();
+        sun.shadow.map=null;
+        sun.shadow.camera.left=-2.6;
+        sun.shadow.camera.right=2.6;
+        sun.shadow.camera.top=2.6;
+        sun.shadow.camera.bottom=-2.6;
+        sun.shadow.camera.updateProjectionMatrix();
+        sun.shadow.normalBias=.0035;
+        sun.shadow.bias=-.00009;
+        sun.shadow.radius=1.65;
+        renderer.shadowMap.autoUpdate=false;
+        renderer.shadowMap.needsUpdate=true;
+        captureCanvas=document.createElement('canvas');
+        captureCanvas.width=captureCanvas.height=size;
+        captureContext=captureCanvas.getContext('2d',{alpha:false});
+        captureContext.imageSmoothingQuality='high';
+    };
+    window.turntableFrame=(fraction,format='image/jpeg')=>{
+        const angle=orbit.angle+2*Math.PI*fraction;
+        const elevation=state.form===1?.29:.31;
+        camera.position.set(
+            orbit.center.x+Math.sin(angle)*orbit.distance*Math.cos(elevation),
+            orbit.center.y+orbit.distance*Math.sin(elevation),
+            orbit.center.z+Math.cos(angle)*orbit.distance*Math.cos(elevation)
+        );
+        camera.lookAt(orbit.center);
+        render();
+        captureContext.drawImage(renderer.domElement,0,0,captureCanvas.width,captureCanvas.height);
+        return captureCanvas.toDataURL(format,.97).split(',')[1];
+    };
+}

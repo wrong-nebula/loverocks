@@ -1,0 +1,31 @@
+{
+  "name": "loverocks",
+  "version": "1.0.0",
+  "description": "A procedural rock studio: Rust/Wasm signed-distance rocks rendered with Three.js",
+  "private": true,
+  "type": "module",
+  "homepage": "https://wrong-nebula.github.io/loverocks/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wrong-nebula/loverocks.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wrong-nebula/loverocks/issues"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "start": "node serve.mjs",
+    "build:wasm": "RUSTFLAGS=\"--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=.\" cargo build --locked --release --target wasm32-unknown-unknown --manifest-path engine/Cargo.toml && wasm-bindgen --target web --out-dir src/wasm engine/target/wasm32-unknown-unknown/release/fjord_engine.wasm"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "vite": "^8.3.8"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
