@@ -82,3 +82,7 @@ python tools/scan-benchmark.py --gltf /path/to/mesh.gltf \
 - Erosion maps: baked with LibreTerrain.
 
 Third-party licence notices are in `licenses/`.
+
+## Licence
+
+loverocks is open source under the [MIT License](LICENSE). Contributions are welcome: open an issue or a pull request.

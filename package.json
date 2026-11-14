@@ -2,6 +2,7 @@
   "name": "loverocks",
   "version": "1.0.0",
   "description": "A procedural rock studio: Rust/Wasm signed-distance rocks rendered with Three.js",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "homepage": "https://wrong-nebula.github.io/loverocks/",
