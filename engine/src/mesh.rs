@@ -216,6 +216,14 @@ fn surface(rock: &Rock, p: V, n: V, footprint: f32) -> (V, f32, f32, f32, f32, f
         V(0.207, 0.112, 0.053),
         (0.51 + 0.21 * settings.runoff) * rust,
     );
+    // Weathering along cracks: a paler, iron-tinged rind beside them, and dark
+    // seep streaks running down steep faces below open cracks.
+    stone = blend(stone, stone * 1.28 + V(0.030, 0.016, 0.0), 0.75 * hit.halo);
+    let steep = 1.0 - smooth(0.45, 0.85, n.1);
+    // Runoff breaks the stain into vertical streaks.
+    let streaks = 0.35 + 0.95 * noise(V(q.0 * 17.0, q.1 * 1.4, q.2 * 17.0));
+    let seep = if steep > 0.05 { (1.5 * rock.seep(p) * steep * streaks).min(1.0) } else { 0.0 };
+    stone = blend(stone, V(0.024, 0.026, 0.021), 0.80 * seep);
     let weight = n.mul(n);
     let channels = smooth(
         0.21,
@@ -230,6 +238,8 @@ fn surface(rock: &Rock, p: V, n: V, footprint: f32) -> (V, f32, f32, f32, f32, f
     let ledge = smooth(0.07, 0.72, n.1);
     let porous = 0.30 + 0.43 * flake + 0.23 * mottling;
     let retention = (0.76 * hit.crack)
+        .max(0.55 * hit.halo)
+        .max(0.45 * seep)
         .max(channels * (0.58 + 0.42 * wide))
         .max(base * 0.72);
     let wet = (settings.wet

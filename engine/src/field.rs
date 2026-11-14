@@ -76,7 +76,21 @@ struct Fracture {
     older: Option<(usize, f32)>,
     /// Gentle curvature of the fracture surface.
     bend: f32,
+    /// Closed fractures healed with quartz show as pale veins, not dark hairlines.
+    vein: bool,
     salt: f32,
+}
+
+/// What the fracture network contributes at a point.
+pub struct Cracks {
+    /// Cut into the rock (signed-distance style, positive inside the opening).
+    pub cut: f32,
+    /// Signed trace distance for shader hairlines; veins are shifted by +0.5.
+    pub line: f32,
+    /// 0..1 proximity to a crack, for the weathering rind and damp margin.
+    pub halo: f32,
+    /// How far weathering lowers the surface around cracks.
+    pub erode: f32,
 }
 
 pub struct Rock {
@@ -99,7 +113,10 @@ pub struct Sample {
     pub crack: f32,
     /// Signed distance to the nearest fracture trace: crosses zero on the trace,
     /// so it interpolates correctly across triangles for crisp shader hairlines.
+    /// Quartz veins are shifted by +0.5 so the shader can tell them apart.
     pub line: f32,
+    /// Proximity to a crack (0..1).
+    pub halo: f32,
     pub local: V,
 }
 
@@ -298,17 +315,80 @@ impl Rock {
             + 0.012 * (noise(q * 11.0) - 0.5)
     }
 
-    /// Open fractures cut into the rock, and the distance to the nearest
-    /// fracture trace. The main joint keeps its hand-placed slot (it defines the
-    /// split boulder); everything else comes from the joint-set network.
-    fn cracks(&self, p: V, shell: f32, grain: f32, erosion: f32, split: bool) -> (f32, f32) {
+    /// Where a point sits relative to one fracture: (axis, extent, rho), with the
+    /// rough, curved wall applied and the fracture clipped where it meets an
+    /// older one. None when the point is far from it.
+    fn trace(&self, f: &Fracture, p: V, q: V) -> Option<(f32, f32, f32)> {
+        let r = p - f.c;
+        let mut axis = r.dot(f.n);
+        if axis.abs() > 0.25 {
+            return None;
+        }
+        let x = r.dot(f.u) / f.a;
+        let y = r.dot(f.v) / f.b;
+        let rho = (x * x + y * y).sqrt();
+        if rho > 1.2 {
+            return None;
+        }
+        let s = V(f.salt, f.salt * 1.7, f.salt * 0.6);
+        axis += f.bend * f.a * (x * x - 0.33)
+            + f.a * 0.075 * (noise(q * 2.3 + s) - 0.5)
+            + 0.018 * (noise(q * 8.5 + s) - 0.5)
+            + 0.004 * (noise(q * 29.0 + s) - 0.5);
+        let mut extent = (1.0 - rho) * f.a.min(f.b);
+        if let Some((o, side)) = f.older {
+            let older = &self.fractures[o];
+            extent = extent.min(side * older.n.dot(p - older.c) + 0.003);
+        }
+        (extent >= -0.03).then_some((axis, extent, rho))
+    }
+
+    /// How strongly open cracks lie just above `p` (0..1): water seeping out of
+    /// a crack runs down the face below it and leaves a dark streak.
+    pub fn seep(&self, p: V) -> f32 {
+        if self.settings.fracture <= 0.001 {
+            return 0.0;
+        }
+        let mut stain: f32 = 0.0;
+        for (k, drop) in [0.04_f32, 0.10, 0.19, 0.31, 0.46].into_iter().enumerate() {
+            let above = p + V(0.0, drop, 0.0);
+            let q = above + self.offset;
+            for f in self.fractures.iter().filter(|f| f.aperture > 0.0) {
+                if let Some((axis, extent, _)) = self.trace(f, above, q) {
+                    if extent > 0.0 {
+                        let near = 1.0 - smooth(0.0, 0.045 + 0.025 * k as f32, axis.abs());
+                        stain = stain.max(near * (1.0 - 0.17 * k as f32));
+                    }
+                }
+            }
+        }
+        stain
+    }
+
+    /// Open fractures cut into the rock, plus the weathering they invite. The
+    /// main joint keeps its hand-placed slot (it defines the split boulder);
+    /// everything else comes from the joint-set network.
+    fn cracks(&self, p: V, shell: f32, grain: f32, erosion: f32, split: bool) -> Cracks {
         let settings = self.settings;
         let fracture = settings.fracture;
         let propagation = fracture
             * settings.frost
             * (0.45 + 0.55 * smooth(0.23, 0.73, 0.62 * erosion + 0.38 * grain));
         let mut d: f32 = -1.0;
-        let mut line: f32 = 1.0;
+        // Nearest trace: (|distance|, signed distance, is vein).
+        let mut best = (1.0_f32, 1.0_f32, false);
+        let mut keep = |axis: f32, half: f32, vein: bool| {
+            let signed = (axis.abs() - half).max(0.0) * axis.signum();
+            if signed.abs() < best.0 {
+                best = (signed.abs(), signed, vein);
+            }
+        };
+        let mut halo: f32 = 0.0;
+        let mut erode: f32 = 0.0;
+        // Water, frost and time work along every crack.
+        let attack = 0.6 * settings.weather + 0.9 * settings.frost + 0.5 * settings.runoff;
+        let band = 0.05 + 0.08 * attack;
+        let q = p + self.offset;
         if !split {
             let reach = self.reach.distance(p) + 5.5 * propagation;
             if reach > -0.06 {
@@ -323,45 +403,29 @@ impl Rock {
                     0.16,
                 );
                 if reach > 0.0 {
-                    line = nearer(line, axis, width * 0.5);
+                    keep(axis, width * 0.5, false);
+                    let near = (1.0 - smooth(0.0, band * 1.3, axis.abs())) * smooth(-0.02, 0.08, reach);
+                    halo = halo.max(near);
+                    erode = erode.max(near * near * (0.016 + 0.06 * attack));
                 }
             }
         }
-        let q = p + self.offset;
-        // Weathering and frost round off and widen the mouths near the surface.
-        let flare = 0.045 * (0.6 * settings.weather + 0.9 * settings.frost + 0.3 * settings.runoff);
+        let flare = 0.045 * attack;
         for f in &self.fractures {
-            let r = p - f.c;
-            let mut axis = r.dot(f.n);
-            if axis.abs() > 0.2 {
+            let Some((axis, extent, rho)) = self.trace(f, p, q) else {
                 continue;
-            }
-            let x = r.dot(f.u) / f.a;
-            let y = r.dot(f.v) / f.b;
-            let rho = (x * x + y * y).sqrt();
-            if rho > 1.2 {
-                continue;
-            }
-            // Rough, self-affine walls: the trace wanders at several scales.
+            };
             let s = V(f.salt, f.salt * 1.7, f.salt * 0.6);
-            axis += f.bend * f.a * (x * x - 0.33)
-                + f.a * 0.075 * (noise(q * 2.3 + s) - 0.5)
-                + 0.018 * (noise(q * 8.5 + s) - 0.5)
-                + 0.004 * (noise(q * 29.0 + s) - 0.5);
-            // How far inside the fracture's outline this point is.
-            let mut extent = (1.0 - rho) * f.a.min(f.b);
-            if let Some((o, side)) = f.older {
-                let older = &self.fractures[o];
-                extent = extent.min(side * older.n.dot(p - older.c) + 0.003);
-            }
-            if extent < -0.03 {
-                continue;
-            }
+            let inside = smooth(-0.01, 0.05, extent);
+            let near = (1.0 - smooth(0.0, band, axis.abs())) * inside;
             if f.aperture <= 0.0 {
-                // Closed fracture: no cut, only a hairline trace for the shader.
+                // Closed fracture: a hairline (or vein), a faint rind and a
+                // shallow weathered seam, but no open cut.
                 if extent > 0.0 {
-                    line = nearer(line, axis, 0.0);
+                    keep(axis, 0.0, f.vein);
                 }
+                halo = halo.max(near * if f.vein { 0.25 } else { 0.5 });
+                erode = erode.max(near * near * (0.004 + 0.02 * attack) * if f.vein { 0.0 } else { 1.0 });
                 continue;
             }
             // Elastic opening: widest in the middle, closing to sharp tips, with
@@ -377,10 +441,17 @@ impl Rock {
                 .min(extent * 0.8);
             d = d.max(groove);
             if extent > 0.0 {
-                line = nearer(line, axis, 0.5 * width * tips);
+                keep(axis, 0.5 * width * tips, false);
             }
+            halo = halo.max(near);
+            // Rounded, eroded margins and flakes chipped off the lips.
+            let lip = (1.0 - smooth(0.0, band * 0.6, axis.abs())) * inside;
+            let chip = smooth(0.58, 0.70, noise(q * 13.0 + s)) * lip;
+            erode = erode.max(near * near * (0.016 + 0.06 * attack) * (0.5 + open) + chip * (0.008 + 0.014 * attack));
         }
-        (d, line)
+        let (_, signed, vein) = best;
+        let line = signed.clamp(-0.2, 0.2) + if vein { 0.5 } else { 0.0 };
+        Cracks { cut: d, line, halo, erode }
     }
 
     fn fragment(&self, p: V, side: f32) -> Sample {
@@ -409,6 +480,7 @@ impl Rock {
                     fresh: 0.0,
                     crack: 0.0,
                     line: 1.0,
+                    halo: 0.0,
                     local: p,
                 };
             }
@@ -425,6 +497,7 @@ impl Rock {
                 fresh: 0.0,
                 crack: 0.0,
                 line: 1.0,
+                halo: 0.0,
                 local: p,
             };
         }
@@ -466,9 +539,13 @@ impl Rock {
         let mut fresh: f32 = 0.0;
         let mut crack = 0.0;
         let mut line = 1.0;
+        let mut halo = 0.0;
         if settings.fracture > 0.001 && distance > -0.37 {
-            let (cut, trace) = self.cracks(p, shell, grain, erosion, side != 0.0);
-            line = trace;
+            let network = self.cracks(p, shell, grain, erosion, side != 0.0);
+            line = network.line;
+            halo = network.halo;
+            distance += network.erode;
+            let cut = network.cut;
             crack = smooth(-0.014, 0.010, cut - distance) * smooth(-0.025, 0.003, cut);
             fresh = 0.60 * crack;
             distance = smax(distance, cut, 0.006);
@@ -492,6 +569,7 @@ impl Rock {
             fresh: fresh.max(smooth(-0.015, 0.025, joint - distance)),
             crack,
             line,
+            halo,
             local: p,
         }
     }
@@ -580,6 +658,7 @@ fn joint_sets(planes: &[Plane], bounds: (V, V), seams: &[Plane; 2], joint: V, se
                 },
                 older,
                 bend: rng.vary(0.16),
+                vein: false,
                 salt: rng.next() * 40.0,
             });
         }
@@ -605,16 +684,17 @@ fn joint_sets(planes: &[Plane], bounds: (V, V), seams: &[Plane; 2], joint: V, se
             aperture: 0.0,
             older: None,
             bend: rng.vary(0.25),
+            vein: rng.next() < 0.35,
             salt: rng.next() * 40.0,
         });
     }
+    // About a third of the closed joints are healed quartz veins.
+    for f in out.iter_mut().filter(|f| f.aperture <= 0.0) {
+        if rng.next() < 0.33 {
+            f.vein = true;
+        }
+    }
     out
-}
-
-/// Keep whichever signed trace distance is closer; `half` is the open half-width.
-fn nearer(current: f32, axis: f32, half: f32) -> f32 {
-    let candidate = (axis.abs() - half).max(0.0) * axis.signum();
-    if candidate.abs() < current.abs() { candidate } else { current }
 }
 
 fn crack_slot(axis: f32, extent: f32, shell: f32, width: f32, depth: f32, bias: f32) -> f32 {

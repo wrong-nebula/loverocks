@@ -255,12 +255,22 @@ baseMaterial.onBeforeCompile=shader=>{
             if(crackLines>0.){
                 // Hairline fractures: a sharp dark core along the trace with a faint
                 // lighter lip of fresh rock, antialiased from the interpolated distance.
-                float trace=abs(vEdgeTransmission);
-                float aa=max(fwidth(vEdgeTransmission),1e-5);
-                float core=1.-smoothstep(crackHair-aa,crackHair+aa,trace);
-                float lip=smoothstep(crackHair,crackHair+.005,trace)*(1.-smoothstep(crackHair+.005,crackHair+.018,trace));
+                // Values above .25 are healed quartz veins (shifted by .5 in the engine).
+                bool vein=vEdgeTransmission>.25;
+                float signedTrace=vein?vEdgeTransmission-.5:vEdgeTransmission;
+                float trace=abs(signedTrace);
+                float aa=max(fwidth(signedTrace),1e-5);
                 float show=rockTexture*(1.-snow);
-                diffuseColor.rgb*=mix(1.,.20,core*show)*(1.+.10*lip*show);
+                if(vein){
+                    float veinHalf=.0022+.0018*rockNoise(vRockPoint*9.);
+                    float body=1.-smoothstep(veinHalf-aa,veinHalf+aa,trace);
+                    vec3 quartz=vec3(.48,.46,.42)*(1.+.12*(rockNoise(vRockPoint*80.)-.5));
+                    diffuseColor.rgb=mix(diffuseColor.rgb,quartz,body*show*.85);
+                }else{
+                    float core=1.-smoothstep(crackHair-aa,crackHair+aa,trace);
+                    float lip=smoothstep(crackHair,crackHair+.005,trace)*(1.-smoothstep(crackHair+.005,crackHair+.018,trace));
+                    diffuseColor.rgb*=mix(1.,.20,core*show)*(1.+.10*lip*show);
+                }
             }
             vec3 lichenColor=mix(vec3(.245,.275,.205),vec3(.395,.355,.21),colony.y);
             lichenColor*=1.+.12*grit;
