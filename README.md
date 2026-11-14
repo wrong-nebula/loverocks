@@ -20,7 +20,7 @@ Each rock type sets its own shape and its geological features: bedding, cleavage
 - **Randomize** (or the **R** key) rolls a whole new rock: a random rock type, seed, climate, elapsed years and sun angle, with weathering and surface values drawn around that rock type's defaults.
 - **Weathering:** elapsed years under a simulated alpine, maritime or continental climate, surface weathering, joint opening and erosion carving.
 - **Surface:** moss, moisture, lichen, snow and ambient occlusion. The rock's fine grain relief fades out on smooth, glossy and wet areas and never shows through moss or lichen.
-- **Moss** has real volume: the mesh worker raises moss into lumpy cushions with thick edges and rebuilds their normals, so moss shapes the silhouette, casts shadows and is included in GLB export. The shader draws clumpy patch edges and a velvety leaf texture, lime to deep green, with a soft sheen at grazing angles and a glow where sunlight comes through thin edges.
+- **Moss** has real volume: the mesh worker raises moss into lumpy cushions with thick edges and rebuilds their normals, so moss shapes the silhouette, casts shadows and is included in GLB export. The shader draws clumpy patch edges and a soft velvety leaf texture, deep to mid green, with a soft sheen at grazing angles and a glow where sunlight comes through thin edges.
 - **View:** material, clay, normals, wireframe, and masks for moss, wetness, lichen, snow, roughness and AO.
 - **Render 4K PNG** saves the current view with a 3,840-pixel long edge. **Export rock GLB** saves the generated meshes with normals and vertex colours.
 

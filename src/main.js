@@ -182,20 +182,20 @@ baseMaterial.onBeforeCompile=shader=>{
                 // Soft cushions: rounded, lighter tops with darker hollows between them.
                 float tuftFade=1.-smoothstep(.3,.9,footprint*48.);
                 float clump=.65*rockNoise(vRockPoint*48.)+.35*rockNoise(vRockPoint*91.+7.);
-                float dome=mix(1.,mix(.62,1.08,smoothstep(.22,.72,clump)),tuftFade);
+                float dome=mix(1.,mix(.80,1.04,smoothstep(.22,.72,clump)),tuftFade);
                 // Velvet: a dense fuzz of tiny leaves at two scales.
                 float leafFade=1.-smoothstep(.3,.9,footprint*340.);
                 float fibre=(rockNoise(vRockPoint*340.)-.5)*leafFade+.5*(rockNoise(vRockPoint*150.+9.)-.5)*(1.-smoothstep(.3,.9,footprint*150.));
                 // Living moss is lime to yellow-green on the tops, deep green in the hollows.
-                float tone=clamp(.40+.50*(cushion-.5)+.45*(clump-.5)*tuftFade+.55*fibre,0.,1.);
-                vec3 deep=vec3(.018,.050,.006), mid=vec3(.060,.135,.012), lime=vec3(.165,.255,.022);
+                float tone=clamp(.40+.35*(cushion-.5)+.25*(clump-.5)*tuftFade+.22*fibre,0.,1.);
+                vec3 deep=vec3(.014,.036,.006), mid=vec3(.040,.088,.012), lime=vec3(.092,.150,.020);
                 vec3 mossCol=(tone<.5?mix(deep,mid,tone*2.):mix(mid,lime,tone*2.-1.))*dome;
                 // Patches of a second, darker species and a few dry, brownish tufts.
                 float species=smoothstep(.55,.75,rockNoise(vRockPoint*6.+21.));
                 mossCol=mix(mossCol,mossCol*vec3(.62,.80,.70),.6*species);
                 float dry=smoothstep(.70,.90,rockNoise(vRockPoint*14.+4.))*tuftFade;
                 mossCol=mix(mossCol,vec3(.10,.085,.030)*dome,.35*dry);
-                mossRelief=(.22*fibre+.16*(clump-.5)*tuftFade)*mossPx;
+                mossRelief=(.08*fibre+.10*(clump-.5)*tuftFade)*mossPx;
                 mossCol*=1.-.40*vSurface.y;
                 vec3 bakedMoss=vec3(.077,.087,.023)*(1.-.40*vSurface.y);
                 vec3 rockCol=perPixelStone?diffuseColor.rgb:clamp((diffuseColor.rgb-bakedMoss*mossV)/max(1.-mossV,.2),0.,1.);
@@ -257,7 +257,7 @@ baseMaterial.onBeforeCompile=shader=>{
             material.specularColor*=mix(stoneSpecular,vec3(1.),max(vSurface.y,snow));
             #ifdef USE_SHEEN
                 // Leaf tips scatter light at grazing angles: a soft velvet rim on moss only.
-                material.sheenColor=vec3(.26,.38,.07)*mossPx*(1.-colony.x)*(1.-snow);
+                material.sheenColor=vec3(.13,.19,.04)*mossPx*(1.-colony.x)*(1.-snow);
                 material.sheenRoughness=.55;
             #endif
             material.specularF90*=mix(dot(stoneSpecular,vec3(1./3.)),1.,max(vSurface.y,snow));`)
@@ -284,7 +284,7 @@ baseMaterial.onBeforeCompile=shader=>{
             // Marble scatters light under the surface: lift its shadows with a warm glow.
             if(stoneType>2.5&&stoneType<3.5) totalEmissiveRadiance+=diffuseColor.rgb*vec3(1.,.92,.80)*.10*(1.-max(colony.x,snow));
             // Thin moss glows lime where the sun shines through it from behind.
-            totalEmissiveRadiance+=diffuseColor.rgb*vec3(1.5,1.9,.6)*mossPx*(1.-snow)*(.06+.55*back*towardViewer*(.35+.65*rim));`);
+            totalEmissiveRadiance+=diffuseColor.rgb*vec3(1.4,1.7,.6)*mossPx*(1.-snow)*(.02+.30*back*towardViewer*(.35+.65*rim));`);
     if(turntableMode){
         shader.uniforms.cameraLut=cameraLut;
         shader.uniforms.cameraLutStrength=cameraLutStrength;
