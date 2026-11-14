@@ -25,6 +25,7 @@ for(const [group,entries] of [['volcanic',volcanicPresets],['geology',geologyPre
 }
 // Offset shared by the shader and the engine so per-pixel features match the mesh.
 const seedAnchor=seed=>{const r=seeded(seed);return [r()*37,r()*37,r()*37];};
+const seedNumber=seed=>Math.floor(seeded(seed+'/moss')()*1e6);
 const specimenPreset=()=>presets[state.form].group?presets[state.form]:undefined;
 const params=new URLSearchParams(location.search);
 const turntableMode=params.has('turntable');
@@ -172,13 +173,25 @@ baseMaterial.onBeforeCompile=shader=>{
                 diffuseColor.rgb*=lamina.rgb;
                 laminaRelief=lamina.a;
             }
-            // Per-pixel moss: clumpy edges and individual cushions drawn over the rock
-            // colour, recovered from the engine's per-vertex blend where needed.
+            // Per-pixel moss over the clean rock colour: clumpy edges and soft cushions
+            // on the coverage grown in src/moss.js.
             float mossV=vSurface.z, mossPx=0., mossRelief=0.;
             if(mossV>.002){
                 float cushion=.55*rockNoise(vRockPoint*30.)+.30*rockNoise(vRockPoint*75.+2.)+.15*rockNoise(vRockPoint*160.+5.);
-                float edgeW=.08+.6*fwidth(mossV)+.15*smoothstep(.3,.9,footprint*75.);
-                mossPx=max(smoothstep(.42-edgeW,.42+edgeW,mossV+(cushion-.5)*.7),smoothstep(.88,.98,mossV));
+                // Fuzzy edge: leaf-scale noise breaks the boundary into strands.
+                float hairFade=1.-smoothstep(.3,.9,footprint*260.);
+                float hair=(rockNoise(vRockPoint*260.)-.5)*hairFade+.6*(rockNoise(vRockPoint*110.+3.)-.5)*(1.-smoothstep(.3,.9,footprint*110.));
+                float edgeW=.05+.6*fwidth(mossV)+.12*smoothstep(.3,.9,footprint*110.);
+                float front=mossV+(cushion-.5)*.45+.42*hair;
+                mossPx=max(smoothstep(.42-edgeW,.42+edgeW,front),smoothstep(.88,.98,mossV));
+                // A sparse fringe of strands just outside the dense cushion.
+                float fringe=smoothstep(.20,.38,front)*(1.-mossPx)*.75;
+                // Stray young tufts take hold in the damp margin ahead of the front.
+                float strayFade=1.-smoothstep(.3,.9,footprint*70.);
+                float stray=smoothstep(.58,.64,.7*rockNoise(vRockPoint*70.+11.)+.3*rockNoise(vRockPoint*160.+4.)+.9*mossV)*smoothstep(.01,.08,mossV)*strayFade;
+                mossPx=max(mossPx,max(stray,fringe));
+                // How far into the colony this pixel is: 0 at the margin, 1 in the old centre.
+                float margin=1.-smoothstep(.35,.85,mossV);
                 // Soft cushions: rounded, lighter tops with darker hollows between them.
                 float tuftFade=1.-smoothstep(.3,.9,footprint*48.);
                 float clump=.65*rockNoise(vRockPoint*48.)+.35*rockNoise(vRockPoint*91.+7.);
@@ -196,10 +209,14 @@ baseMaterial.onBeforeCompile=shader=>{
                 float dry=smoothstep(.70,.90,rockNoise(vRockPoint*14.+4.))*tuftFade;
                 mossCol=mix(mossCol,vec3(.10,.085,.030)*dome,.35*dry);
                 mossRelief=(.08*fibre+.10*(clump-.5)*tuftFade)*mossPx;
+                // New growth at the margin is lighter and yellower than the old centre.
+                mossCol=mix(mossCol,mossCol*vec3(1.22,1.16,.80)+vec3(.010,.012,0.),.45*margin);
                 mossCol*=1.-.40*vSurface.y;
-                vec3 bakedMoss=vec3(.077,.087,.023)*(1.-.40*vSurface.y);
-                vec3 rockCol=perPixelStone?diffuseColor.rgb:clamp((diffuseColor.rgb-bakedMoss*mossV)/max(1.-mossV,.2),0.,1.);
-                diffuseColor.rgb=mix(rockCol,mossCol,mossPx);
+                // The rock right next to a cushion stays damp and shaded: a dark contact
+                // zone with a faint film of algae.
+                float contact=smoothstep(.0,.16,mossV)*(1.-mossPx);
+                diffuseColor.rgb=mix(diffuseColor.rgb*(1.-.40*contact),vec3(.045,.055,.030),.18*contact);
+                diffuseColor.rgb=mix(diffuseColor.rgb,mossCol,mossPx);
             }
             float flake=filteredGrain(vRockPoint,34.,footprint);
             float grit=filteredGrain(vRockPoint,102.,footprint);
@@ -397,7 +414,8 @@ function options(form) {
         historyKey=key;
     }
     return [
-        state.weather,p.rounding,state.fracture,state.carving,state.moss,state.wet,state.lichen,
+        // Moss is grown in the worker (src/moss.js), so the engine bakes none.
+        state.weather,p.rounding,state.fracture,state.carving,0,state.wet,state.lichen,
         1-Math.exp(-exposureHistory.runoff[state.years]/16700),1-Math.exp(-exposureHistory.frost[state.years]/5700),
         ...seedAnchor(state.seed)
     ];
@@ -437,7 +455,12 @@ function generate() {
     el('glb').disabled=true;
     el('png').disabled=true;
     const detail=turntableMode?160:Number(el('detail').value);
-    jobs=[{form:state.form,seed:state.seed,resolution:detail,options:options(state.form),meshWeather:!turntableMode}];
+    // Moss grows facing away from the prevailing sun; elevation is a fixed typical
+    // value so the Sun elevation slider can relight without regrowing.
+    const sunAngle=presets[state.form].sun, sunElevation=T.MathUtils.degToRad(35);
+    const moss={amount:state.moss,years:state.years,seed:seedNumber(state.seed),
+        sun:[Math.cos(sunAngle)*Math.cos(sunElevation),Math.sin(sunElevation),Math.sin(sunAngle)*Math.cos(sunElevation)]};
+    jobs=[{form:state.form,seed:state.seed,resolution:detail,options:options(state.form),meshWeather:!turntableMode,moss}];
     let incoming=[];
     worker.onmessage=({data})=>{
         if(data.id!==jobId)return;
