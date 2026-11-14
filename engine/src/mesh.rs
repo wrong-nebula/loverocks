@@ -282,5 +282,6 @@ fn surface(rock: &Rock, p: V, n: V, footprint: f32) -> (V, f32, f32, f32, f32, f
         0.87 + 0.09 * tuft - 0.11 * wet,
         moss,
     );
-    (albedo, roughness, wet, moss, lichen, hit.fresh, 0.0)
+    // The last channel carries the signed fracture-trace distance to the shader.
+    (albedo, roughness, wet, moss, lichen, hit.fresh, hit.line.clamp(-0.2, 0.2))
 }

@@ -12,6 +12,8 @@ You orbit a single rock, chosen from 13 types, under a physically based sky. Mes
 - **Volcanic:** columnar basalt, vesicular scoria, obsidian.
 - **Specimens:** cross-bedded sandstone, coarse granite, white marble, slate, conglomerate, mica schist.
 
+The fjord rocks are broken by a **joint-set fracture network** (`engine/src/field.rs`). Two or three families of roughly parallel fractures follow each rock's bedding seams and main joint, plus a seeded oblique set. Each fracture is a finite elliptical patch: its opening is widest in the middle and closes to sharp tips, its walls are rough and gently curved, and younger fractures stop where they meet an older one. Open joints are cut into the mesh, with mouths widened by weathering and frost. Closed joints and small micro-fractures pass a signed trace distance to the shader, which draws them as crisp hairlines at any mesh detail. **Joint opening** scales the apertures.
+
 Each rock type sets its own shape and its geological features: bedding, cleavage, foliation, crystals, pebbles or vesicles. The mesh carries one smooth value per vertex, such as the bedding coordinate for sandstone or the cleavage coordinate for slate. `src/geology-detail.glsl` resolves the fine structure per pixel from it, so laminae, crystals and mica flakes stay sharp at any mesh detail. The conglomerate pebble field uses the same hash in Rust and GLSL, so each pebble's colour sits on its raised dome.
 
 ## Controls

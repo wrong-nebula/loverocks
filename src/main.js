@@ -101,6 +101,9 @@ const rockGrain={value:1};
 const crystalline={value:0};
 const bedded={value:0};
 const stoneType={value:0};
+// Fjord rocks carry a signed fracture-trace distance for crisp hairline cracks.
+const crackLines={value:0};
+const crackHair={value:.002};
 const rockSeed={value:new T.Vector3()};
 const rockMapAmount={value:1};
 const rockLightDirection={value:new T.Vector3()};
@@ -130,6 +133,8 @@ baseMaterial.onBeforeCompile=shader=>{
     shader.uniforms.crystalline=crystalline;
     shader.uniforms.bedded=bedded;
     shader.uniforms.stoneType=stoneType;
+    shader.uniforms.crackLines=crackLines;
+    shader.uniforms.crackHair=crackHair;
     shader.uniforms.rockSeed=rockSeed;
     shader.uniforms.snowAmount=snowAmount;
     shader.uniforms.aoAmount=aoAmount;
@@ -144,6 +149,7 @@ baseMaterial.onBeforeCompile=shader=>{
     shader.fragmentShader=`varying float vEdgeTransmission; varying vec2 vMeshWeather; varying float vRockAO;
         varying mat3 vRockNormalMatrix;
         uniform vec3 rockLightDirection; uniform float snowAmount; uniform float aoAmount; uniform float crystalline;
+        uniform float crackLines; uniform float crackHair;
         `+surfaceDetail+geologyDetail+shader.fragmentShader
         .replace('#include <color_fragment>',`#include <color_fragment>
             float footprint=max(length(dFdx(vRockPoint)),length(dFdy(vRockPoint)));
@@ -246,6 +252,16 @@ baseMaterial.onBeforeCompile=shader=>{
             float relief=mix(mineralRelief+mapRelief+mossRelief+.24*colony.x+(laminaRelief*bedded+stoneRelief-.20*crystalline*(1.-graniteBoundary))*rockTexture,flake*.17+grit*.095,snow);
             diffuseColor.rgb*=1.+(mineralRelief+mapRelief)*mix(.44,.73,vSurface.z);
             diffuseColor.rgb*=1.+rockMapAmount*(rockMap.b*.13-rockMap.g*.085)*rockTexture;
+            if(crackLines>0.){
+                // Hairline fractures: a sharp dark core along the trace with a faint
+                // lighter lip of fresh rock, antialiased from the interpolated distance.
+                float trace=abs(vEdgeTransmission);
+                float aa=max(fwidth(vEdgeTransmission),1e-5);
+                float core=1.-smoothstep(crackHair-aa,crackHair+aa,trace);
+                float lip=smoothstep(crackHair,crackHair+.005,trace)*(1.-smoothstep(crackHair+.005,crackHair+.018,trace));
+                float show=rockTexture*(1.-snow);
+                diffuseColor.rgb*=mix(1.,.20,core*show)*(1.+.10*lip*show);
+            }
             vec3 lichenColor=mix(vec3(.245,.275,.205),vec3(.395,.355,.21),colony.y);
             lichenColor*=1.+.12*grit;
             diffuseColor.rgb=mix(diffuseColor.rgb,lichenColor,colony.x*.74);
@@ -295,7 +311,7 @@ baseMaterial.onBeforeCompile=shader=>{
             float back=smoothstep(.06,.83,-dot(normal,lightDir));
             float towardViewer=smoothstep(-.35,.74,-dot(lightDir,viewDir));
             // Only glass and marble carry a transmission signal; other stones reuse the channel.
-            float carriesTransmission=(1.-max(crystalline,bedded))*(stoneType>3.5?0.:1.);
+            float carriesTransmission=(1.-max(crystalline,bedded))*(stoneType>3.5?0.:1.)*(1.-crackLines);
             float tint=vEdgeTransmission*carriesTransmission*rim*(.15+.82*back*towardViewer);
             totalEmissiveRadiance+=(stoneType>2.5?vec3(.62,.58,.50)*.55:vec3(.63,.177,.054))*tint;
             // Marble scatters light under the surface: lift its shadows with a warm glow.
@@ -360,6 +376,7 @@ function cameraReset() {
     const fine={'vermont-marble':[.35,.20],'bangor-slate':[.30,.20],'oligomict-conglomerate':[.6,.5],'mica-schist':[.45,.35],'red-rock-canyon':[.78,.55]}[type];
     // Fjord rocks (no preset group) get a calmer surface: less grain and map relief.
     const fjord=!presets[state.form].group;
+    crackLines.value=Number(fjord);
     rockGrain.value=glass?.12:fine?.[0]??(fjord?.32:1);
     rockMapAmount.value=glass?.075:fine?.[1]??(fjord?.34:1);
     scene.environmentIntensity=glass?.92:granite?.76:.45;
@@ -460,6 +477,7 @@ function generate() {
     const sunAngle=presets[state.form].sun, sunElevation=T.MathUtils.degToRad(35);
     const moss={amount:state.moss,years:state.years,seed:seedNumber(state.seed),
         sun:[Math.cos(sunAngle)*Math.cos(sunElevation),Math.sin(sunElevation),Math.sin(sunAngle)*Math.cos(sunElevation)]};
+    crackHair.value=.0012+.012*state.fracture;
     jobs=[{form:state.form,seed:state.seed,resolution:detail,options:options(state.form),meshWeather:!turntableMode,moss}];
     let incoming=[];
     worker.onmessage=({data})=>{
