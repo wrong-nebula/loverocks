@@ -28,6 +28,15 @@ export class RockMesh {
         return v1;
     }
     /**
+     * @returns {Float32Array}
+     */
+    fracture_tags() {
+        const ret = wasm.rockmesh_fracture_tags(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * @returns {Uint32Array}
      */
     indices() {

@@ -1,39 +1,27 @@
-import init, {generate,SurfaceIndex} from './wasm/fjord_engine.js';
-import {growMoss,mossVolume} from './moss.js';
+import init from './wasm/fjord_engine.js';
+import {generateSource} from './source.js';
+import {buildLODs} from './lod.js';
 
 const ready=init();
-
-function meshWeather(vertices,indices) {
-    const count=vertices.length/16;
-    const positions=new Float32Array(count*3);
-    const normals=new Float32Array(count*3);
-    for(let i=0;i<count;i++){
-        for(let axis=0;axis<3;axis++){
-            positions[i*3+axis]=vertices[i*16+axis];
-            normals[i*3+axis]=vertices[i*16+3+axis];
-        }
-    }
-    const surface=new SurfaceIndex(positions,indices);
-    try {
-        return surface.weather(normals);
-    } finally {
-        surface.free();
-    }
-}
+let cachedKey, cachedSource;
 
 self.onmessage=async ({data})=>{
     const {id,jobs}=data;
     try {
         await ready;
         for (const [index,job] of jobs.entries()) {
-            const mesh=generate(job.form,job.seed,job.resolution,new Float32Array(job.options));
-            const vertices=mesh.vertices(), indices=mesh.indices(), bounds=mesh.bounds();
-            mesh.free();
-            if(job.moss) mossVolume(vertices,indices,growMoss(vertices,indices,job.moss));
-            const weather=job.meshWeather?meshWeather(vertices,indices):null;
-            const buffers=[vertices.buffer,indices.buffer,bounds.buffer];
-            if(weather) buffers.push(weather.buffer);
-            self.postMessage({id,index,vertices,indices,bounds,weather},buffers);
+            const key=JSON.stringify(job);
+            if(key!==cachedKey) {
+                self.postMessage({id,progress:'Generating the reference surface…'});
+                cachedSource=generateSource(job);cachedKey=key;
+            }
+            const reference=cachedSource;
+            const result=await buildLODs(reference,data.optimization,message=>self.postMessage({id,progress:message}));
+            // Keep the canonical source in this worker for budget-only edits.
+            const source={vertices:reference.vertices.slice(),indices:reference.indices.slice(),bounds:reference.bounds.slice(),weather:reference.weather?.slice(),fractureTags:reference.fractureTags?.slice(),featureKind:reference.featureKind};
+            const buffers=[];
+            for(const mesh of [source,...result.levels])for(const name of ['vertices','indices','bounds','weather','fractureTags'])if(mesh[name])buffers.push(mesh[name].buffer);
+            self.postMessage({id,index,source,...result},buffers);
         }
         self.postMessage({id,done:true});
     } catch (error) {

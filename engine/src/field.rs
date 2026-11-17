@@ -83,6 +83,8 @@ struct Fracture {
 
 /// What the fracture network contributes at a point.
 pub struct Cracks {
+    /// Dominant open cut: stable ID, wall side, cut distance, tip extent, width, shell depth.
+    pub fracture: [f32; 6],
     /// Cut into the rock (signed-distance style, positive inside the opening).
     pub cut: f32,
     /// Signed trace distance for shader hairlines; veins are shifted by +0.5.
@@ -108,6 +110,7 @@ pub struct Rock {
 }
 #[derive(Clone, Copy)]
 pub struct Sample {
+    pub fracture: [f32; 6],
     pub distance: f32,
     pub fresh: f32,
     pub crack: f32,
@@ -375,6 +378,7 @@ impl Rock {
             * settings.frost
             * (0.45 + 0.55 * smooth(0.23, 0.73, 0.62 * erosion + 0.38 * grain));
         let mut d: f32 = -1.0;
+        let mut feature = [0.0; 6];
         // Nearest trace: (|distance|, signed distance, is vein).
         let mut best = (1.0_f32, 1.0_f32, false);
         let mut keep = |axis: f32, half: f32, vein: bool| {
@@ -402,6 +406,7 @@ impl Rock {
                     0.09 + 1.20 * fracture + 2.3 * propagation,
                     0.16,
                 );
+                feature = [1.0, (axis + 0.16 * shell).signum(), d, reach, width * 2.0, shell];
                 if reach > 0.0 {
                     keep(axis, width * 0.5, false);
                     let near = (1.0 - smooth(0.0, band * 1.3, axis.abs())) * smooth(-0.02, 0.08, reach);
@@ -411,7 +416,7 @@ impl Rock {
             }
         }
         let flare = 0.045 * attack;
-        for f in &self.fractures {
+        for (index, f) in self.fractures.iter().enumerate() {
             let Some((axis, extent, rho)) = self.trace(f, p, q) else {
                 continue;
             };
@@ -439,6 +444,9 @@ impl Rock {
             let groove = ((width + mouth) * tips - axis.abs())
                 .min(depth - shell)
                 .min(extent * 0.8);
+            if groove > d {
+                feature = [(index + 2) as f32, axis.signum(), groove, extent, 2.0 * (width + mouth) * tips, shell];
+            }
             d = d.max(groove);
             if extent > 0.0 {
                 keep(axis, 0.5 * width * tips, false);
@@ -451,7 +459,7 @@ impl Rock {
         }
         let (_, signed, vein) = best;
         let line = signed.clamp(-0.2, 0.2) + if vein { 0.5 } else { 0.0 };
-        Cracks { cut: d, line, halo, erode }
+        Cracks { cut: d, line, halo, erode, fracture: feature }
     }
 
     fn fragment(&self, p: V, side: f32) -> Sample {
@@ -476,6 +484,7 @@ impl Rock {
             let approx = side * self.joint.distance(p);
             if approx > 0.20 {
                 return Sample {
+                    fracture: [0.0; 6],
                     distance: (distance - envelope).max(approx - 0.16),
                     fresh: 0.0,
                     crack: 0.0,
@@ -493,6 +502,7 @@ impl Rock {
         }
         if distance > envelope + 0.045 {
             return Sample {
+                    fracture: [0.0; 6],
                 distance: (distance - envelope).max(joint),
                 fresh: 0.0,
                 crack: 0.0,
@@ -537,11 +547,13 @@ impl Rock {
         distance +=
             (settings.runoff * 0.037 + settings.frost * 0.024) * smooth(0.32, 0.74, erosion);
         let mut fresh: f32 = 0.0;
+        let mut feature = [0.0; 6];
         let mut crack = 0.0;
         let mut line = 1.0;
         let mut halo = 0.0;
         if settings.fracture > 0.001 && distance > -0.37 {
             let network = self.cracks(p, shell, grain, erosion, side != 0.0);
+            feature = network.fracture;
             line = network.line;
             halo = network.halo;
             distance += network.erode;
@@ -564,7 +576,11 @@ impl Rock {
                 distance = smax(distance, cut, 0.017);
             }
         }
+        if side != 0.0 && settings.fracture > 0.001 && (feature[0] == 0.0 || joint > feature[2]) && joint > distance - 0.03 {
+            feature = [1.0, -side, joint, 1.0, settings.fracture * 0.4, shell];
+        }
         Sample {
+            fracture: feature,
             distance: smax(distance, joint, 0.013),
             fresh: fresh.max(smooth(-0.015, 0.025, joint - distance)),
             crack,

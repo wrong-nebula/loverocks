@@ -8,6 +8,7 @@ export const surfaceindex_weather: (a: number, b: number, c: number) => [number,
 export const __wbg_rockmesh_free: (a: number, b: number) => void;
 export const generate: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const rockmesh_bounds: (a: number) => [number, number];
+export const rockmesh_fracture_tags: (a: number) => [number, number];
 export const rockmesh_indices: (a: number) => [number, number];
 export const rockmesh_vertices: (a: number) => [number, number];
 export const __wbindgen_externrefs: WebAssembly.Table;

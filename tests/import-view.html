@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Portable GLB verification</title>
+<style>body{margin:0;background:#33362e;color:#eeece2;font:14px system-ui}canvas{display:block}p{position:absolute;bottom:0;left:16px}</style></head>
+<body><p id="result">Loading exported GLB…</p><script type="module">
+import * as T from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+const renderer=new T.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
+document.body.prepend(renderer.domElement);
+const scene=new T.Scene();scene.background=new T.Color(0x33362e);
+const pmrem=new T.PMREMGenerator(renderer),room=new RoomEnvironment();
+scene.environment=pmrem.fromScene(room,.12).texture;scene.environmentIntensity=.45;
+pmrem.dispose();room.dispose();
+scene.add(new T.HemisphereLight(0xc9dfe8,0x5e573c,.85));
+const sun=new T.DirectionalLight(0xffe1ae,2.65);sun.position.set(-3,4,5);scene.add(sun);
+const camera=new T.PerspectiveCamera(40,innerWidth/innerHeight,.01,1000);
+const controls=new OrbitControls(camera,renderer.domElement);
+const render=()=>renderer.render(scene,camera);controls.addEventListener('change',render);
+try {
+    const path=new URLSearchParams(location.search).get('asset')||'/output/overhang-LOD1.glb';
+    const gltf=await new GLTFLoader().loadAsync(path);
+    scene.add(gltf.scene);
+    const bounds=new T.Box3().setFromObject(gltf.scene),sphere=bounds.getBoundingSphere(new T.Sphere());
+    controls.target.copy(sphere.center);camera.position.copy(sphere.center).add(new T.Vector3(1,.5,2).normalize().multiplyScalar(sphere.radius*3.6));
+    controls.update();render();
+    const meshes=[];gltf.scene.traverse(mesh=>{if(mesh.isMesh)meshes.push({triangles:mesh.geometry.index.count/3,
+        vertices:mesh.geometry.attributes.position.count,uv:!!mesh.geometry.attributes.uv,
+        albedo:!!mesh.material.map,normal:!!mesh.material.normalMap,roughness:!!mesh.material.roughnessMap,ao:!!mesh.material.aoMap});});
+    window.importReady={meshes};document.querySelector('#result').textContent=`Re-imported portable GLB · ${meshes.reduce((n,m)=>n+m.triangles,0)} triangles`;
+}catch(error){window.importError=String(error);document.querySelector('#result').textContent=String(error);throw error;}
+</script></body></html>

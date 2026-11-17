@@ -8,6 +8,8 @@ pub const STRIDE: usize = 16;
 
 pub struct Mesh {
     pub vertices: Vec<f32>,
+    /// Four floats per vertex: fracture ID (0 = none), side, role bits, local aperture.
+    pub fracture_tags: Vec<f32>,
     pub indices: Vec<u32>,
     pub bounds: [f32; 6],
 }
@@ -15,14 +17,29 @@ pub struct Mesh {
 // Surface nets place one vertex at the mean of the zero crossings in each
 // active cell, then join the four adjacent cells around each crossing edge.
 pub fn extract(rock: &Rock, resolution: usize) -> Mesh {
-    extract_field(
+    let mut mesh = extract_field(
         rock.min,
         rock.max,
         resolution,
         |p| rock.sample(p).distance,
         |p, e| rock.normal(p, e),
         |p, n, cell| surface(rock, p, n, cell),
-    )
+    );
+    let span = rock.max - rock.min;
+    let cell = span.0.max(span.1).max(span.2) / resolution as f32;
+    for vertex in mesh.vertices.chunks_exact(STRIDE) {
+        let hit = rock.sample(V(vertex[0], vertex[1], vertex[2]));
+        let [id, side, cut, extent, aperture, shell] = hit.fracture;
+        if id > 0.0 && cut >= hit.distance - 2.0 * cell && cut.abs() <= 2.5 * cell {
+            let mut roles = 1_u32; // wall
+            if shell <= 2.5 * cell { roles |= 2; } // mouth / lip
+            if extent <= 2.0 * cell { roles |= 4; } // finite tip or T-junction termination
+            mesh.fracture_tags.extend_from_slice(&[id, side, roles as f32, aperture]);
+        } else {
+            mesh.fracture_tags.extend_from_slice(&[0.0; 4]);
+        }
+    }
+    mesh
 }
 
 pub fn extract_field(
@@ -186,6 +203,7 @@ pub fn extract_field(
         }
     }
     Mesh {
+        fracture_tags: Vec::new(),
         vertices,
         indices,
         bounds: [min.0, min.1, min.2, max.0, max.1, max.2],

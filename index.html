@@ -9,7 +9,7 @@
 <body>
 <main class="studio">
   <section class="stage" id="stage" aria-label="Rock preview">
-    <div class="picture"><div id="viewport"><p id="status" role="status">Loading rock engine…</p></div></div>
+    <div class="picture"><div id="viewport"><div id="comparison" hidden aria-hidden="true"><span>Source</span><span id="comparison-lod"></span></div><p id="status" role="status">Loading rock engine…</p></div></div>
     <div class="toolbar">
       <label class="pass"><span>View</span><select id="view"><option value="material">Material</option><option value="clay">Clay</option><option value="normal">Normals</option><option value="wire">Wireframe</option><option value="moss">Moss</option><option value="wet">Wetness</option><option value="lichen">Lichen</option><option value="snow" hidden>Snow mask</option><option value="roughness">Roughness</option><option value="ao">AO mask</option></select></label>
       <span id="hint">Drag to orbit · Scroll to zoom</span>
@@ -25,7 +25,51 @@
         <label class="row" id="form-row">Rock type<select id="form"><optgroup label="Fjord rocks"><option value="0">Overhang</option><option value="1">Split boulder</option><option value="2">Upright slab</option><option value="3">Path stone</option></optgroup><optgroup id="volcanic-forms" label="Volcanic rocks"></optgroup><optgroup id="geology-forms" label="Rock specimens"></optgroup></select></label>
         <form id="seed-form"><label for="seed">Seed</label><div class="seed"><input id="seed" maxlength="96" autocomplete="off" spellcheck="false"><button>Apply</button><button type="button" id="shuffle" aria-label="Randomize seed" title="Randomize seed"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h.01m6 0h.01m-3 3h.01m-3 3h.01m6 0h.01"/></svg></button></div></form>
         <button type="button" id="randomize" class="randomize" title="Roll a new rock: type, seed, climate and weathering (R)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>Randomize</button>
-        <label class="row">Mesh detail<select id="detail"><option value="32">Draft</option><option value="54">Detailed</option><option value="88">Fine</option><option value="144">High</option><option value="224" selected>Ultra</option><option value="256">Maximum</option></select></label>
+        <label class="row">Source detail<select id="detail"><option value="32">Draft</option><option value="54">Detailed</option><option value="88">Fine</option><option value="144" selected>High</option><option value="224">Ultra</option><option value="256">Maximum</option></select></label>
+      </section>
+      <section aria-labelledby="optimization-title">
+        <h2 id="optimization-title">Game asset</h2>
+        <label class="row" for="target">Triangle budget<input id="target" type="number" min="24" max="50000" step="1" value="500" aria-describedby="budget-help"></label>
+        <p class="help" id="budget-help">Budget for LOD 1. Near and distant meshes are generated with it.</p>
+        <label class="row">Priority<select id="priority"><option value="budget">Meet budget</option><option value="quality">Preserve quality</option></select></label>
+        <label class="row">Fracture protection<select id="fractures" aria-describedby="fracture-help"><option value="off">Off</option><option value="anchors">Rim landmarks</option><option value="skeleton">Fracture skeleton · experimental</option><option value="strict">Keep fracture faces</option></select></label>
+        <p class="help" id="fracture-help">Landmarks use labeled mouths, walls and tips. Opening repair may exceed the budget. Keep fracture faces retains all labeled faces. Bake textures for surface detail.</p>
+        <label class="row">Opening repair<select id="repair-openings" aria-describedby="repair-help"><option value="on" selected>Check &amp; repair</option><option value="off">Off</option></select></label>
+        <p class="help" id="repair-help">Checks near, background and distant viewing sizes. Review unresolved openings before export.</p>
+        <details class="advanced"><summary>Preservation settings</summary>
+          <label class="row">Tolerance<select id="tolerance"><option value="0.01">Strict · 1%</option><option value="0.03" selected>Balanced · 3%</option><option value="0.08">Relaxed · 8%</option></select></label>
+          <p class="help">Combined shape and attribute error, not a guaranteed surface distance. Budget priority may exceed it.</p>
+          <label class="row">Feature emphasis<select id="features"><option value="0">Low</option><option value="1" selected>Balanced</option><option value="3">High</option></select></label>
+          <p class="help">Weights fracture and geological signals. Does not lock every opening.</p>
+        </details>
+        <details id="budget-curve" class="advanced">
+          <summary>Quality vs budget</summary>
+          <label class="curve-label" for="curve-budgets">Triangle budgets</label>
+          <input id="curve-budgets" type="text" value="500, 750, 1000, 2000" spellcheck="false" aria-describedby="curve-help" disabled>
+          <p class="help" id="curve-help">Compare up to 12 budgets from 24 to 50,000. Separate them with commas.</p>
+          <label class="row">Method<select id="curve-method"><option value="skeleton">Fracture skeleton</option><option value="anchors-off">Landmarks · repair off</option><option value="anchors">Landmarks + repair</option><option value="strict">Keep fracture faces</option><option value="off">Unprotected</option></select></label>
+          <label class="row">Priority<select id="curve-priority"><option value="budget">Meet budget</option><option value="quality">Preserve quality</option></select></label>
+          <label class="row">Viewing size<select id="curve-size"><option value="64">64 pixels</option><option value="128" selected>128 pixels</option><option value="256">256 pixels</option></select></label>
+          <p class="help">Uses the current fidelity tolerance and feature emphasis. Repair may exceed a requested budget. The experimental skeleton uses sparse fracture guides and movable vertices. Check its measured quality before use.</p>
+          <div class="curve-actions"><button id="curve-run" type="button" disabled>Compare budgets</button><button id="curve-cancel" type="button" hidden>Cancel</button><button id="curve-reset" type="button">Reset budgets</button></div>
+          <p id="curve-status" class="help" role="status">Generate a Fjord rock to compare budgets.</p>
+          <label class="row">Plot<select id="curve-metric"><option value="depth">Wall depth error</option><option value="silhouette">Silhouette overlap</option><option value="failures">Failed regions</option></select></label>
+          <div id="curve-plot" hidden></div><div id="curve-table" hidden></div>
+          <p id="curve-selected" class="help" aria-live="polite"></p>
+          <p class="help">GPU measurements from 16 cameras. Acceptance at 128 pixels requires each important opening to retain coverage and wall depth error to stay within 2 pixels. Other sizes are diagnostics.</p>
+          <div class="curve-actions"><button id="curve-use" type="button" disabled>Use selected budget</button><button id="curve-export" type="button" disabled>Export measurements</button></div>
+        </details>
+        <button id="reduce" class="wide" disabled>Apply budget</button>
+        <div id="lod-results" aria-live="polite"></div>
+        <label class="row">Preview<select id="lod-preview" disabled><option value="source">Source</option><option value="0">LOD 0 · Near</option><option value="1" selected>LOD 1 · Background</option><option value="2">LOD 2 · Distant</option><option value="auto">Automatic</option></select></label>
+        <label class="row">Compare<select id="compare"><option value="off">Off</option><option value="split">Split view</option><option value="silhouette">Silhouettes</option></select></label>
+        <label class="row">Viewing size<select id="preview-size"><option value="fit">Fit to view</option><option value="512">512 render pixels</option><option value="256">256 render pixels</option><option value="128">128 render pixels</option><option value="64">64 render pixels</option></select></label>
+        <p class="help" id="compare-help" hidden>Source on the left; selected LOD on the right. Both use the same camera.</p>
+        <label class="row" id="pixel-row" hidden>Pixel tolerance<select id="pixel-error"><option value="0.5">0.5 px</option><option value="1" selected>1 px</option><option value="2">2 px</option><option value="4">4 px</option></select></label>
+        <p class="help" id="lod-status" role="status"></p>
+        <label class="row">Bake textures<select id="bake-size"><option value="256">256 px</option><option value="512" selected>512 px</option><option value="1024">1024 px</option></select></label>
+        <button id="bake" class="wide" disabled>Bake &amp; preview selected LOD</button>
+        <p class="help" id="bake-status">Bakes colour, normals, roughness and AO for portable GLB export.</p>
       </section>
       <section>
         <h2>Weathering</h2>
@@ -35,7 +79,7 @@
       <section><h2>Surface</h2><div id="surface-controls"></div></section>
       <section><h2>Lighting</h2><div id="scene-controls"></div></section>
     </div>
-    <div class="exports" role="group" aria-label="Export"><button id="png" disabled title="Supersampled still with a 3,840 pixel long edge">Render 4K PNG</button><button id="glb" disabled>Export rock GLB</button></div>
+    <div class="exports" role="group" aria-label="Export"><button id="png" disabled title="Supersampled still with a 3,840 pixel long edge">4K PNG</button><button id="glb" disabled>Export GLB</button><button id="lod-export" disabled>LOD pack</button></div>
   </aside>
 </main>
 <script type="module" src="/src/main.js"></script>

@@ -18,6 +18,9 @@ impl RockMesh {
     pub fn vertices(&self) -> Vec<f32> {
         self.0.vertices.clone()
     }
+    pub fn fracture_tags(&self) -> Vec<f32> {
+        self.0.fracture_tags.clone()
+    }
     pub fn indices(&self) -> Vec<u32> {
         self.0.indices.clone()
     }

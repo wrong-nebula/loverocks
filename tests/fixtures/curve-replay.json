@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "source": {
+    "form": 1,
+    "seed": "fjord-2168",
+    "job": {
+      "form": 1,
+      "seed": "fjord-2168",
+      "resolution": 54,
+      "options": [
+        0.126,
+        0.102,
+        0.083,
+        0.52,
+        0,
+        0.48,
+        0.57,
+        0,
+        0,
+        18.011794979916885,
+        23.47065794141963,
+        8.335016096010804
+      ],
+      "meshWeather": true,
+      "moss": {
+        "amount": 0.27,
+        "years": 0,
+        "seed": 936811,
+        "sun": [
+          -0.5697721208045377,
+          0.573576436351046,
+          0.5885319039922422
+        ]
+      }
+    }
+  },
+  "settings": {
+    "target": 500,
+    "priority": "budget",
+    "tolerance": 0.03,
+    "features": 1,
+    "fractures": "skeleton",
+    "openingRepair": true
+  },
+  "method": "skeleton",
+  "size": 128,
+  "budgets": [
+    600
+  ]
+}

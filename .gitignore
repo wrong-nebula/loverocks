@@ -2,6 +2,7 @@ node_modules/
 dist/
 engine/target/
 benchmark-results/
+output/
 .DS_Store
 *.log
 .vercel/

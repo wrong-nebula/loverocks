@@ -14,19 +14,41 @@
     "url": "https://github.com/wrong-nebula/loverocks/issues"
   },
   "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:glb": "node tests/validate-glb.mjs",
+    "test:visual": "node tests/visual/run.mjs",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node serve.mjs",
-    "build:wasm": "RUSTFLAGS=\"--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=.\" cargo build --locked --release --target wasm32-unknown-unknown --manifest-path engine/Cargo.toml && wasm-bindgen --target web --out-dir src/wasm engine/target/wasm32-unknown-unknown/release/fjord_engine.wasm"
+    "build:wasm": "RUSTFLAGS=\"--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=.\" cargo build --locked --release --target wasm32-unknown-unknown --manifest-path engine/Cargo.toml && wasm-bindgen --target web --out-dir src/wasm engine/target/wasm32-unknown-unknown/release/fjord_engine.wasm",
+    "test:openings": "node tests/visual/run.mjs --acceptance-only",
+    "test:budget": "node tests/visual/budget-run.mjs",
+    "test:fracture-cases": "node tests/visual/budget-run.mjs --repairs",
+    "cli": "node automation/cli.js",
+    "mcp": "node automation/mcp.js",
+    "test:automation": "node --test tests/automation.integration.mjs"
   },
   "dependencies": {
-    "three": "^0.187.0"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "fflate": "^0.8.3",
+    "meshoptimizer": "^1.3.0",
+    "three": "^0.187.0",
+    "three-mesh-bvh": "^0.9.8",
+    "xatlas-three": "^0.2.1",
+    "xatlasjs": "^0.2.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "gltf-validator": "^2.0.0-dev.3.10",
+    "playwright": "^1.65.1",
     "vite": "^8.3.8"
   },
   "engines": {
     "node": ">=22.12"
+  },
+  "bin": {
+    "loverocks": "automation/cli.js",
+    "loverocks-mcp": "automation/mcp.js"
   }
 }

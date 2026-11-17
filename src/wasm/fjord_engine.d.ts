@@ -6,6 +6,7 @@ export class RockMesh {
     free(): void;
     [Symbol.dispose](): void;
     bounds(): Float32Array;
+    fracture_tags(): Float32Array;
     indices(): Uint32Array;
     vertices(): Float32Array;
 }
@@ -37,6 +38,7 @@ export interface InitOutput {
     readonly __wbg_rockmesh_free: (a: number, b: number) => void;
     readonly generate: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly rockmesh_bounds: (a: number) => [number, number];
+    readonly rockmesh_fracture_tags: (a: number) => [number, number];
     readonly rockmesh_indices: (a: number) => [number, number];
     readonly rockmesh_vertices: (a: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;

@@ -1,7 +1,10 @@
 import './style.css';
 import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {GLTFExporter} from 'three/addons/exporters/GLTFExporter.js';
+import {chooseLOD,normalizeSettings} from './lod-policy.js';
+import {installBudgetCurve} from './budget-curve.js';
+import {createOpeningGPUValidator} from './opening-gpu.js';
+const loadBaker=()=>import('./asset-bake.js');
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {loadAtmosphere,makeSky,setSkySun} from './atmosphere.js';
 import surfaceDetail from './surface-detail.glsl?raw';
@@ -60,10 +63,10 @@ viewport.prepend(renderer.domElement);
 const scene=new T.Scene();
 scene.background=new T.Color(0x33362e);
 scene.fog=new T.FogExp2(0x33362e,0.011);
-const camera=new T.PerspectiveCamera(40,1,0.045,330);
+const camera=new T.PerspectiveCamera(40,1,0.045,2500);
 const controls=new OrbitControls(camera,renderer.domElement);
 controls.minDistance=1.9;
-controls.maxDistance=16;
+controls.maxDistance=2000;
 controls.enableDamping=false;
 controls.addEventListener('change',render);
 const pmrem=new T.PMREMGenerator(renderer);
@@ -95,6 +98,25 @@ const rockGroup=new T.Group();
 scene.add(rockGroup);
 let landscape,worker,jobId=0,jobs=[],rockMeshes=[],rockTimer;
 let exposureHistory,historyKey;
+let assetBundle,sourceMesh,activeLOD=1,baking=false,bakeController;
+const bakedAssets=new Map();
+let gpuController,gpuValidation=Promise.resolve();
+const budgetCurve=installBudgetCurve({renderer,getSource:()=>window.fjordReady?assetBundle?.source:null,getSettings:optimizationSettings,
+    getIdentity:()=>({form:state.form,seed:state.seed,job:jobs[0]}),apply:settings=>{
+        el('target').value=settings.target;el('fractures').value=settings.fractures;el('repair-openings').value=settings.openingRepair?'on':'off';
+        el('priority').value=settings.priority;el('tolerance').value=settings.tolerance;el('features').value=settings.features;generate(true);
+    }});
+const silhouette=new T.MeshBasicMaterial({color:0xffffff});
+const renderSize=new T.Vector2(),cameraPoint=new T.Vector3();
+function optimizationSettings(){return normalizeSettings({target:el('target').value,priority:el('priority').value,tolerance:el('tolerance').value,features:el('features').value,openingRepair:el('repair-openings').value==='on',fractures:state.form<4?el('fractures').value:'off'});}
+function clearBakes(){
+    bakeController?.abort();
+    for(const mesh of rockMeshes){mesh.geometry=mesh.userData.proceduralGeometry;mesh.material=currentMaterial();}
+    if(bakedAssets.size)el('bake-status').textContent='Surface changed. Bake again to refresh the portable material.';
+    for(const asset of bakedAssets.values())asset.dispose();
+    bakedAssets.clear();
+}
+
 const aoAmount={value:state.ao};
 const snowAmount={value:0};
 const rockGrain={value:1};
@@ -366,13 +388,83 @@ const mask=new T.ShaderMaterial({
         }`
 });
 
-function render() {renderer.render(scene,camera);}
+function showOnly(level) {
+    if(!sourceMesh)return;
+    sourceMesh.visible=level===-1;
+    rockMeshes.forEach((mesh,index)=>mesh.visible=index===level);
+}
+function selectedLOD() {
+    if(turntableMode||el('lod-preview').value==='source')return -1;
+    if(el('lod-preview').value!=='auto')return Number(el('lod-preview').value);
+    camera.updateMatrixWorld();
+    cameraPoint.copy(sourceMesh.geometry.boundingSphere.center).applyMatrix4(sourceMesh.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
+    renderer.getDrawingBufferSize(renderSize);
+    return chooseLOD(assetBundle.levels,{depth:-cameraPoint.z-sourceMesh.geometry.boundingSphere.radius,viewportHeight:renderSize.y,
+        fov:camera.fov,pixelError:Number(el('pixel-error').value),previous:activeLOD});
+}
+function updateLODStatus() {
+    if(!assetBundle)return;
+    const mesh=activeLOD<0?assetBundle.source:assetBundle.levels[activeLOD];
+    const stats=activeLOD<0?assetBundle.sourceStats:mesh.stats;
+    const label=activeLOD<0?'Source':`LOD ${activeLOD}`;
+    const baked=bakedAssets.get(activeLOD);
+    let text=`${label} · ${stats.triangles.toLocaleString()} triangles · ${(baked?.stats.vertices??stats.vertices).toLocaleString()} vertices · ${((baked?.stats.geometryBytes??stats.bytes)/1024).toFixed(1)} KiB geometry`;
+    if(baked)text+=` · ${(baked.stats.textureBytesWithMipmaps/1048576).toFixed(1)} MiB textures with mipmaps`;
+    if(activeLOD>=0){
+        if(mesh.protection.lockedVertices)text+=` · ${mesh.protection.lockedVertices.toLocaleString()} fracture vertices fixed`;
+        const opening=mesh.protection.openings;
+        const gpu=mesh.protection.gpu;
+        if(gpu?.status==='checking')text+=' · Checking rendered openings…';
+        else if(gpu?.status==='passed')text+=' · GPU opening checks passed at 128px.';
+        else if(gpu?.status==='needs-review')text+=` · GPU opening checks failed in ${gpu.failed} regions. Review before export.`;
+        else if(gpu?.status==='unavailable')text+=' · GPU checks unavailable. Review before export.';
+        else if(opening?.status==='needs-review')text+=' · Opening checks unresolved. Review the mesh or increase the budget.';
+        else if(opening?.status==='passed')text+=` · CPU estimate checked at ${opening.viewingSize}px; GPU check not available for this level.`;
+        if(!mesh.budgetMet)text+=` · Budget not met (${mesh.target.toLocaleString()} requested).`;
+        else if(!mesh.qualityMet)text+=' · Budget met; fidelity tolerance exceeded.';
+    }
+    if(el('lod-status').textContent!==text)el('lod-status').textContent=text;
+    el('lod-status').classList.toggle('lod-warning',activeLOD>=0&&(!mesh.budgetMet||!mesh.qualityMet||(mesh.protection.gpu?['needs-review','unavailable'].includes(mesh.protection.gpu.status):mesh.protection.openings?.status==='needs-review')));
+    for(const row of el('lod-results').querySelectorAll('[data-level]'))row.dataset.selected=Number(row.dataset.level)===activeLOD;
+    el('bake').disabled=baking||activeLOD<0||!window.fjordReady;
+    el('fractures').disabled=baking||state.form>=4;
+    el('repair-openings').disabled=baking||state.form>=4||el('fractures').value!=='anchors';
+    el('priority').disabled=baking||(state.form<4&&['anchors','strict'].includes(el('fractures').value));
+    el('fracture-help').textContent=state.form>=4?'Fracture protection applies to the four Fjord rock types.':el('fractures').value==='skeleton'?'Experimental: sparse fracture guides stay fixed while other vertices can move. Openings may change. Compare measured quality before choosing a budget.':'Landmarks use labeled mouths, walls and tips. Opening repair may exceed the budget. Keep fracture faces retains all labeled faces. Bake textures for surface detail.';
+    el('glb').textContent=activeLOD<0?'Source GLB':'Export GLB';
+    el('glb').title=activeLOD<0?'Source mesh with vertex colours only. Select a LOD for baked textures.':'Export the selected LOD with baked PBR textures';
+    el('comparison').hidden=el('compare').value==='off';
+    el('comparison-lod').textContent=`${label} · ${stats.triangles.toLocaleString()} tris${baked?' · Baked':''}`;
+    window.fjordLOD={active:activeLOD,triangles:stats.triangles,baked:bakedAssets.has(activeLOD)};
+}
+function render() {
+    if(import.meta.env.DEV&&params.has('quality-test'))return;
+    if(!assetBundle||!sourceMesh){renderer.render(scene,camera);return;}
+    activeLOD=selectedLOD();showOnly(activeLOD);updateLODStatus();
+    const comparison=el('compare').value;
+    const originalOverride=scene.overrideMaterial,background=scene.background,fog=scene.fog,floor=landscape.visible;
+    if(comparison==='silhouette'){
+        scene.overrideMaterial=silhouette;scene.background=new T.Color(0x151813);scene.fog=null;landscape.visible=false;
+    }
+    renderer.setScissorTest(false);renderer.render(scene,camera);
+    if(comparison!=='off') {
+        renderer.getSize(renderSize);renderer.setScissorTest(true);renderer.setScissor(0,0,Math.floor(renderSize.x/2),renderSize.y);
+        showOnly(-1);renderer.render(scene,camera);renderer.setScissorTest(false);showOnly(activeLOD);
+    }
+    scene.overrideMaterial=originalOverride;scene.background=background;scene.fog=fog;landscape.visible=floor;
+}
 function cameraReset() {
     const p=presets[state.form];
     controls.target.set(0,Math.max(0.45,p.height),0);
-    camera.position.copy(controls.target).add(new T.Vector3(
-        Math.sin(p.azimuth)*5.35,Math.sin(p.elevation)*5.35,Math.cos(p.azimuth)*5.35));
     camera.fov=40;
+    el('preview-size').value='fit';
+    camera.aspect=viewport.clientWidth/Math.max(viewport.clientHeight,1);
+    const sphere=sourceMesh?.geometry.boundingSphere;
+    if(sphere)controls.target.copy(sphere.center);
+    const halfAngle=Math.min(T.MathUtils.degToRad(camera.fov/2),Math.atan(Math.tan(T.MathUtils.degToRad(camera.fov/2))*camera.aspect));
+    const distance=sphere?sphere.radius/Math.sin(halfAngle)*1.15:8;
+    camera.position.copy(controls.target).add(new T.Vector3(
+        Math.sin(p.azimuth),Math.sin(p.elevation),Math.cos(p.azimuth)).normalize().multiplyScalar(distance));
     renderer.domElement.style.touchAction='none';
     renderer.domElement.tabIndex=0;
     renderer.domElement.setAttribute('aria-label','Rock preview. Arrow keys orbit. Plus and minus zoom.');
@@ -468,19 +560,31 @@ function currentMaterial() {
 }
 function updateView() {
     const material=currentMaterial();
-    rockGroup.traverse(object=>{if(object.isMesh)object.material=material;});
+    material.fog=false;
+    rockMeshes.forEach((mesh,index)=>{
+        const baked=bakedAssets.get(index);
+        mesh.geometry=state.view==='material'&&baked?baked.geometry:mesh.userData.proceduralGeometry;
+        mesh.material=state.view==='material'&&baked?baked.material:material;
+    });
+    if(sourceMesh)sourceMesh.material=material;
     landscape.visible=state.view==='material'||state.view==='clay';
     render();
 }
-function generate() {
+function generate(reuse=false) {
+    if(baking)return;
+    gpuController?.abort();
+    if(!reuse)budgetCurve.sourcePending();else budgetCurve.cancel('Updating mesh…');
     clearTimeout(rockTimer);
-    worker?.terminate();
+    if(!reuse){worker?.terminate();worker=undefined;}
+    clearBakes();
     window.fjordReady=null;
-    worker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
+    worker??=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
     const id=++jobId;
+    const fitCamera=!sourceMesh||sourceMesh.userData.form!==state.form;
     el('status').textContent='Building rock meshes…';
     el('glb').disabled=true;
     el('png').disabled=true;
+    for(const id of ['reduce','lod-preview','bake','lod-export','curve-run','curve-use'])el(id).disabled=true;
     const detail=turntableMode?160:Number(el('detail').value);
     // Moss grows facing away from the prevailing sun; elevation is a fixed typical
     // value so the Sun elevation slider can relight without regrowing.
@@ -492,10 +596,12 @@ function generate() {
     let incoming=[];
     worker.onmessage=({data})=>{
         if(data.id!==jobId)return;
+        if(data.progress){el('status').textContent=data.progress;return;}
         if(data.error){
             el('status').textContent=data.error;
             worker.terminate();
             worker=undefined;
+            el('reduce').disabled=false;
             return;
         }
         if(!data.done) {
@@ -503,29 +609,45 @@ function generate() {
             el('status').textContent=`Building rocks · ${data.index+1} / ${jobs.length}`;
             return;
         }
-        for(const child of rockGroup.children) child.geometry.dispose();
-        rockGroup.clear();
-        rockMeshes=[];
-        for(const [index,item] of incoming.entries()) {
-            const job=jobs[index],mesh=new T.Mesh(asGeometry(item),currentMaterial());
-            mesh.name=job.seed;
-            mesh.castShadow=true;
-            mesh.receiveShadow=true;
-            rockGroup.add(mesh);
-            rockMeshes[index]=mesh;
+        for(const child of rockGroup.children)(child.userData.proceduralGeometry??child.geometry).dispose();
+        rockGroup.clear();rockMeshes=[];
+        assetBundle=incoming[0];
+        sourceMesh=new T.Mesh(asGeometry(assetBundle.source),currentMaterial());
+        sourceMesh.name=jobs[0].seed+'_source';sourceMesh.castShadow=sourceMesh.receiveShadow=true;
+        sourceMesh.userData.form=state.form;
+        rockGroup.add(sourceMesh);
+        for(const level of assetBundle.levels) {
+            const mesh=new T.Mesh(asGeometry(level),currentMaterial());
+            mesh.userData.proceduralGeometry=mesh.geometry;
+            mesh.name=jobs[0].seed+'_LOD'+level.level;
+            mesh.castShadow=mesh.receiveShadow=true;rockGroup.add(mesh);rockMeshes.push(mesh);
         }
         incoming=[];
-        worker.terminate();
-        worker=undefined;
         el('status').textContent='';
-        el('glb').disabled=false;
-        el('png').disabled=false;
+        for(const id of ['glb','png','reduce','lod-preview','lod-export'])el(id).disabled=false;
+        el('lod-results').innerHTML=`<table class="lod-table"><thead><tr><th>Mesh</th><th>Triangles</th><th>Reduction</th></tr></thead><tbody>
+            <tr data-level="-1"><td>Source</td><td>${assetBundle.sourceStats.triangles.toLocaleString()}</td><td>—</td></tr>
+            ${assetBundle.levels.map(l=>`<tr data-level="${l.level}"><td>LOD ${l.level}</td><td>${l.stats.triangles.toLocaleString()}</td><td>${(100*(1-l.stats.triangles/assetBundle.sourceStats.triangles)).toFixed(1)}%</td></tr>`).join('')}
+            </tbody></table>`;
+        el('bake-status').textContent='Bakes colour, normals, roughness and AO for portable GLB export.';
+        window.fjordReady={meshes:1,triangles:assetBundle.sourceStats.triangles,levels:assetBundle.levels.map(l=>({level:l.level,target:l.target,...l.stats,deviation:l.deviation,protection:l.protection,budgetMet:l.budgetMet,qualityMet:l.qualityMet}))};
         updateView();
-        window.fjordReady={meshes:rockMeshes.length,triangles:rockMeshes.reduce((sum,m)=>sum+m.geometry.index.count/3,0)};
+        if(fitCamera&&!turntableMode)cameraReset();
+        budgetCurve.sourceChanged(JSON.stringify(jobs[0]),state.form<4);
+        if(state.form<4&&assetBundle.settings.fractures!=='off') {
+            const bundle=assetBundle,level=bundle.levels[1],controller=new AbortController();gpuController=controller;
+            level.protection.gpu={status:'checking'};updateLODStatus();
+            gpuValidation=(async()=>{
+                const checker=createOpeningGPUValidator(renderer,bundle.source);
+                try {level.protection.gpu=checker?await checker.measure(level,{signal:controller.signal}):{status:'unavailable'};}
+                catch(error){if(!controller.signal.aborted)level.protection.gpu={status:'unavailable',reason:String(error)};}
+                finally{checker?.dispose();if(assetBundle===bundle&&!controller.signal.aborted)updateLODStatus();}
+            })();
+        }else gpuValidation=Promise.resolve();
         document.dispatchEvent(new Event('fjord:ready'));
     };
-    worker.onerror=event=>{el('status').textContent=event.message||'The mesh worker could not start.';};
-    worker.postMessage({id,jobs});
+    worker.onerror=event=>{if(id!==jobId)return;el('status').textContent=event.message||'The mesh worker could not start.';worker?.terminate();worker=undefined;el('reduce').disabled=false;};
+    worker.postMessage({id,jobs,optimization:optimizationSettings()});
 }
 function updateUrl() {
     const query=new URLSearchParams({form:state.form,seed:state.seed});
@@ -567,8 +689,8 @@ for(const [key,label,min,max,step] of fields) {
         state[key]=Number(el(key).value);
         sliderValue(key,min,max);
         if(key==='light'){lights();return;}
-        if(key==='ao'){aoAmount.value=state.ao;render();return;}
-        if(key==='snow'){snowAmount.value=state.snow;render();return;}
+        if(key==='ao'){aoAmount.value=state.ao;clearBakes();updateView();return;}
+        if(key==='snow'){snowAmount.value=state.snow;clearBakes();updateView();return;}
         clearTimeout(rockTimer);
         rockTimer=setTimeout(generate,180);
     });
@@ -591,6 +713,7 @@ el('shuffle').onclick=()=>{
 // defaults, so clean specimens stay clean; view settings (AO, snow, mesh
 // detail) are left alone.
 function randomize() {
+    if(baking)return;
     const random=(min,max)=>min+(max-min)*Math.random();
     const clamp=(key,value)=>{
         const [, , min,max,step]=fields.find(field=>field[0]===key);
@@ -620,7 +743,7 @@ document.addEventListener('keydown',event=>{
     const typing=event.target.closest?.('input,select,textarea,[contenteditable]');
     if(event.key.toLowerCase()==='r'&&!event.metaKey&&!event.ctrlKey&&!event.altKey&&!typing) randomize();
 });
-el('detail').onchange=generate;
+el('detail').onchange=()=>generate();
 el('view').onchange=()=>{state.view=el('view').value;updateView();};
 el('climate').onchange=()=>{state.climate=el('climate').value;generate();};
 el('reset').onclick=cameraReset;
@@ -672,22 +795,88 @@ el('png').onclick=async()=>{
         button.disabled=!window.fjordReady;
     }
 };
-el('glb').onclick=async()=>{
-    const group=new T.Group();
-    for(const rock of rockMeshes) {
-        const copy=rock.clone();
-        copy.material=new T.MeshStandardMaterial({vertexColors:true,roughness:specimenPreset()?.seed==='glass-buttes'?0.18:0.84});
-        group.add(copy);
-    }
-    try {
-        const buffer=await new GLTFExporter().parseAsync(group,{binary:true});
-        download(buffer,'model/gltf-binary','.glb');
-    } catch(error) {
-        el('status').textContent=error.message;
-    } finally {
-        for(const child of group.children)child.material.dispose();
-    }
+function setBakeBusy(value) {
+    baking=value;
+    for(const input of document.querySelectorAll('.inspector input,.inspector select,.inspector button,.exports button'))input.disabled=value;
+    budgetCurve.setExternalBusy(value);
+    if(!value){el('bake').disabled=activeLOD<0;updateLODStatus();}
+}
+async function ensureBaked(level) {
+    const size=Number(el('bake-size').value),cached=bakedAssets.get(level);
+    if(cached?.size===size)return cached;
+    if(cached){rockMeshes[level].geometry=rockMeshes[level].userData.proceduralGeometry;rockMeshes[level].material=currentMaterial();cached.dispose();bakedAssets.delete(level);}
+    bakeController=new AbortController();
+    const {bakeAsset}=await loadBaker();
+    const result=await bakeAsset({source:assetBundle.source,level:assetBundle.levels[level],size,renderer,material:baseMaterial,
+        progress:message=>{el('status').textContent=message;el('bake-status').textContent=message;},signal:bakeController.signal});
+    bakedAssets.set(level,result);return result;
+}
+async function runBake(action) {
+    if(baking||!window.fjordReady)return;
+    if(budgetCurve.getResults().busy)budgetCurve.cancel();
+    setBakeBusy(true);
+    try {await gpuValidation;await action();el('status').textContent='';}
+    catch(error){el('status').textContent=error.message;el('bake-status').textContent='Bake failed. Try a smaller texture size or a higher triangle budget.';console.error(error);}
+    finally{setBakeBusy(false);updateView();}
+}
+function manifest() {
+    return {version:1,generator:'loverocks',seed:state.seed,form:state.form,settings:{...state},sourceResolution:Number(el('detail').value),
+        optimization:assetBundle.settings,coordinateSystem:'right-handed, Y-up',units:'generator units',
+        lodSelection:{metric:'bidirectional sampled maximum surface distance',certifiedBound:false,pixelTolerance:Number(el('pixel-error').value),hysteresis:.15},
+        material:'Baked standard metallic-roughness PBR; clearcoat, sheen and transmission approximated',
+        levels:assetBundle.levels.map(l=>({level:l.level,file:`rock_LOD${l.level}.glb`,target:l.target,...l.stats,
+            budgetMet:l.budgetMet,qualityMet:l.qualityMet,simplifierError:l.simplifierError,deviation:l.deviation,protection:l.protection,
+            textureSize:bakedAssets.get(l.level)?.size??null,exportStats:bakedAssets.get(l.level)?.stats??null,
+            projection:bakedAssets.get(l.level)?.projection??null}))};
+}
+el('reduce').onclick=()=>{
+    if(!el('target').reportValidity())return;
+    generate(true);
 };
+el('fractures').onchange=()=>{if(['anchors','strict'].includes(el('fractures').value))el('priority').value='quality';else if(el('fractures').value==='skeleton')el('priority').value='budget';updateLODStatus();};
+for(const id of ['tolerance','features'])el(id).addEventListener('change',()=>budgetCurve.settingsChanged());
+el('target').onkeydown=event=>{if(event.key==='Enter')el('reduce').click();};
+el('lod-preview').onchange=()=>{el('pixel-row').hidden=el('lod-preview').value!=='auto';updateView();};
+el('compare').onchange=()=>{el('compare-help').hidden=el('compare').value==='off';render();};
+el('pixel-error').onchange=render;
+el('preview-size').onchange=()=>{
+    if(!sourceMesh)return;
+    if(el('preview-size').value==='fit'){cameraReset();return;}
+    const sphere=sourceMesh.geometry.boundingSphere;
+    renderer.getDrawingBufferSize(renderSize);
+    const direction=camera.position.clone().sub(controls.target).normalize();
+    const angle=Math.atan(Number(el('preview-size').value)*Math.tan(T.MathUtils.degToRad(camera.fov/2))/renderSize.y);
+    controls.target.copy(sphere.center);
+    camera.position.copy(controls.target).addScaledVector(direction,sphere.radius/Math.sin(angle));
+    controls.update();render();
+};
+el('bake').onclick=()=>runBake(async()=>{
+    const level=activeLOD;await ensureBaked(level);
+    el('bake-status').textContent=`LOD ${level} baked at ${el('bake-size').value} px. Preview now uses the portable material.`;
+});
+el('glb').onclick=()=>runBake(async()=>{
+    const {glbFor}=await loadBaker();
+    const level=activeLOD;
+    if(level<0){
+        const material=new T.MeshStandardMaterial({vertexColors:true,roughness:.84});
+        try{download(await glbFor(sourceMesh.geometry,material,state.seed+'_source',{exportMode:'vertex-colour source'}),'model/gltf-binary','-source.glb');}
+        finally{material.dispose();}
+        return;
+    }
+    const baked=await ensureBaked(level);
+    download(await glbFor(baked.geometry,baked.material,state.seed+'_LOD'+level,manifest().levels[level]),'model/gltf-binary',`-LOD${level}.glb`);
+    el('bake-status').textContent=`Exported LOD ${level} with baked PBR textures.`;
+});
+el('lod-export').onclick=()=>runBake(async()=>{
+    const {glbFor,makeLODPack}=await loadBaker();
+    const files={};
+    for(const level of assetBundle.levels){
+        const baked=await ensureBaked(level.level);
+        files[`rock_LOD${level.level}.glb`]=new Uint8Array(await glbFor(baked.geometry,baked.material,state.seed+'_LOD'+level.level,manifest().levels[level.level]));
+    }
+    download(makeLODPack(files,manifest()),'application/zip','-LOD-pack.zip');
+    el('bake-status').textContent='Exported three baked GLBs and an LOD manifest.';
+});
 new ResizeObserver(()=>{
     const {width,height}=viewport.getBoundingClientRect();
     if(width<1||height<1)return;
@@ -697,7 +886,26 @@ new ResizeObserver(()=>{
     render();
 }).observe(viewport);
 resetSurface();sync();landscapeUpdate();cameraReset();lights();
+if(import.meta.env.DEV&&params.has('quality-test'))el('detail').value='32';
 Promise.all([atmosphereLoad,surfaceLoad]).then(generate);
+
+// A dev-only adapter lets visual tests exercise the real source shader and
+// portable baker. Vite removes this branch from production builds.
+if(import.meta.env.DEV&&params.has('quality-test')) {
+    import('../tests/visual/harness.js').then(({qualityHarness})=>{
+        window.fjordQuality=qualityHarness({renderer,scene,material:baseMaterial,sourceGeometry:()=>sourceMesh.geometry,getBundle:()=>assetBundle});
+        window.fjordQuality.source=()=>assetBundle.source;
+        window.fjordQuality.curveResults=()=>budgetCurve.getResults();
+        window.fjordQuality.configure=fixture=>new Promise((resolve,reject)=>{
+            Object.assign(state,{form:fixture.form,seed:fixture.seed,years:0,climate:'alpine',snow:0,ao:.82,view:'material'});
+            resetSurface();Object.assign(state,fixture.surface??{});el('detail').value=fixture.resolution??88;
+            aoAmount.value=state.ao;sync();cameraReset();lights();
+            const timer=setTimeout(()=>{document.removeEventListener('fjord:ready',done);reject(Error('Quality fixture generation timed out.'));},120000);
+            const done=()=>{clearTimeout(timer);resolve(window.fjordReady);};
+            document.addEventListener('fjord:ready',done,{once:true});generate();
+        });
+    });
+}
 
 // The local batch renderer uses the same geometry, material and camera as the studio.
 if(turntableMode) {
@@ -742,7 +950,7 @@ if(turntableMode) {
         sun.position.copy(center).addScaledVector(sunDirection,18);
         const span=bounds.getSize(new T.Vector3());
         let horizontalRadius=0;
-        const position=rockMeshes[0].geometry.getAttribute('position');
+        const position=sourceMesh.geometry.getAttribute('position');
         for(let i=0;i<position.count;i++) {
             horizontalRadius=Math.max(horizontalRadius,Math.hypot(position.getX(i)-center.x,position.getZ(i)-center.z));
         }
