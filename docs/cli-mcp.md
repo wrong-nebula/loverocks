@@ -1,6 +1,6 @@
 # CLI and MCP budget comparisons
 
-Both interfaces call the same Wasm source generator, LOD reducer and independent 16-camera GPU opening validator as the studio. They measure geometry quality and return replayable JSON; GLB baking/export remains in the studio. All four Fjord forms are supported. The experimental skeleton and the strict 128-pixel acceptance limits are unchanged.
+Both interfaces call the same Wasm source generator, LOD reducer and independent 16-camera GPU opening validator as the studio. They measure geometry quality and return replayable JSON; GLB baking/export remains in the studio. All four Fjord forms are supported. The experimental `surfaces` method adds rendered fitting and 16 additional validation angles. The strict 128-pixel acceptance limits are unchanged.
 
 ## Setup
 
@@ -55,7 +55,19 @@ The input file may be a schema-1 UI/CLI curve export or an automation request:
 
 `source` accepts preset settings (`form`, `seed`, `resolution`, `years`, `climate`, `weather`, `fracture`, `carving`, `moss`, `wet`, `lichen`) or the exact `source.job` object from an exported curve. Exact jobs preserve the procedural options, weather and moss settings. CLI source overrides are rejected for exact-job replays to prevent mixing a different seed with old procedural parameters. Preset defaults match the studio, except that source detail defaults to 54 for a practical headless run.
 
-Budgets: 1–12 integers, 24–50,000, sorted/deduplicated. Methods: `skeleton`, `anchors-off`, `anchors`, `strict`, `off`. Landmark/strict modes enforce quality priority and may exceed the target. Tolerance ranges from .001 to .5 and feature emphasis from 0 to 3. Source resolution ranges from 16 to 256. Timeout ranges from 1 second to 30 minutes, default 10 minutes. Invalid/unknown values are rejected rather than clamped.
+Budgets: 1–12 integers, 24–50,000, sorted/deduplicated. Methods: `surfaces`, `skeleton`, `anchors-off`, `anchors`, `strict`, `off`. Landmark/strict modes enforce quality priority and may exceed the target. Tolerance ranges from .001 to .5 and feature emphasis from 0 to 3. Source resolution ranges from 16 to 256. Timeout ranges from 1 second to 30 minutes, default 10 minutes. Invalid/unknown values are rejected rather than clamped.
+
+## Surface fitting and budget search
+
+```sh
+node automation/cli.js curve --form 1 --resolution 88 --method surfaces \
+  --budgets 500,1000,2000,4000,8000,16000,32000 --refine-steps 8 \
+  --timeout-ms 1800000 --detail full --out surfaces.json
+```
+
+`refineSteps` / `--refine-steps` accepts 0–32 iterations (default 8). Zero compares seeds and checks both camera sets without editing geometry. Surface rows include patch allocation, selected seed, fitting history, and separate development/validation summaries. All methods return `budgetStudy`: the smallest actual passing mesh among tested candidates, never a proven minimum. A pass requires the budget to be met and the fixed 128-pixel checks to pass.
+
+The surface workflow chooses between a patch-constrained mesh and a skeleton mesh using the 16 development cameras. It then fits against those cameras and evaluates 16 additional angles once. Both sets must pass. `surfacePartition`/`surfaces` describes the patch candidate even when the skeleton seed wins. See [fracture surfaces](fracture-surfaces.md) for constraints and limitations.
 
 ## MCP
 

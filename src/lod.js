@@ -2,6 +2,7 @@ import {MeshoptSimplifier, MeshoptEncoder} from 'meshoptimizer';
 import {BufferGeometry, BufferAttribute, Vector3} from 'three';
 import {MeshBVH} from 'three-mesh-bvh';
 import {simplifySkeleton} from './fracture-skeleton.js';
+import {simplifyFractureSurfaces} from './fracture-surfaces.js';
 import {openingWitnesses,inspectOpenings,constrainOpeningFailures,openingSummary} from './opening-repair.js';
 import {fractureRegions,fractureLocks,supportMissingLandmarks,verifyProtection} from './fracture-protection.js';
 
@@ -98,6 +99,12 @@ export async function buildLODs(source,input={},progress=()=>{}, {repairOpenings
             if(!requestedLevels.includes(level))continue;
             progress(`Reducing LOD ${level} to ${target.toLocaleString()} triangles…`);
             const start=performance.now();
+            if(settings.fractures==='surfaces') {
+                const mesh=simplifyFractureSurfaces(source,target,settings);validateMesh(mesh);
+                const stats=meshStats(mesh),deviation=measureDeviation(sourceGeometry,mesh);
+                levels.push({...mesh,level,target,stats,deviation,budgetMet:stats.triangles<=target,qualityMet:false,errorMetric:'plane-fit; rendered validation pending',reductionMs:performance.now()-start});
+                continue;
+            }
             if(settings.fractures==='skeleton') {
                 const mesh=await simplifySkeleton(source,target,settings);validateMesh(mesh);
                 const check=inspectOpenings(openingContext,positionsOf(mesh),mesh.indices,[256,128,64][level]);

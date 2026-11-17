@@ -6,7 +6,7 @@ import {normalizeSettings} from '../src/lod-policy.js';
 import {OPENING_ACCEPTANCE} from '../src/opening-acceptance.js';
 
 const finite=z.number().finite(),unit=finite.min(0).max(1);
-export const methods=['skeleton','anchors-off','anchors','strict','off'];
+export const methods=['skeleton','surfaces','anchors-off','anchors','strict','off'];
 const resolution=z.number().int().min(16).max(256);
 const form=z.number().int().min(0).max(3);
 const seed=z.string().min(1).max(96);
@@ -21,6 +21,7 @@ export const requestShape={source:z.union([jobSchema,sourceSchema]).default({}),
     method:z.enum(methods).default('skeleton'),priority:z.enum(['budget','quality']).default('budget'),
     tolerance:finite.min(.001).max(.5).default(.03),features:finite.min(0).max(3).default(1),
     size:z.union([z.literal(64),z.literal(128),z.literal(256)]).default(128),
+    refineSteps:z.number().int().min(0).max(32).default(8),
     detail:z.enum(['summary','full']).default('summary'),timeoutMs:z.number().int().min(1000).max(1800000).default(600000)};
 export const requestSchema=z.object(requestShape).strict();
 
@@ -42,14 +43,15 @@ export function normalizeRequest(input) {
 export function replayRequest(report) {
     if(report.schema!==1||!report.source?.job||!report.settings)throw Error('Expected a schema 1 curve export with source.job and settings.');
     return {source:report.source.job,budgets:report.budgets,method:report.method,size:report.size,
-        priority:report.settings.priority,tolerance:report.settings.tolerance,features:report.settings.features};
+        priority:report.settings.priority,tolerance:report.settings.tolerance,features:report.settings.features,refineSteps:report.refineSteps??8};
 }
 export function catalog() {
-    return {name:'loverocks',forms:presets.map((p,form)=>({form,name:p.name,seed:p.seed})),methods,
+    return {name:'loverocks',forms:presets.map((p,form)=>({form,name:p.name,seed:p.seed})),methods,surfaceFitting:{refineSteps:{min:0,max:32,default:8},developmentCameras:16,additionalCameras:16},
         budgets:{min:24,max:50000,maxItems:12,default:[500,750,1000,2000]},sizes:[64,128,256],acceptanceSize:128,cameras:16,
         acceptancePolicy:OPENING_ACCEPTANCE,sourceResolution:{min:16,max:256,default:54},
         notes:['Landmark and strict modes enforce quality priority and may exceed the requested budget.',
             'Skeleton is experimental. Meeting a budget does not imply fracture quality passes.',
+            'Surfaces is experimental: patch/skeleton seed comparison, rendered fitting, then 16 additional camera checks. Smallest passing means among tested candidates, not a proven minimum.',
             '64 and 256 pixels are diagnostics. Only 128 pixels can receive acceptance.',
             'Measurements use headless Chromium WebGL (SwiftShader), not CPU acceptance estimates.',
             'This interface measures geometry. It does not bake or export GLB assets.']};

@@ -27,7 +27,9 @@
     "test:fracture-cases": "node tests/visual/budget-run.mjs --repairs",
     "cli": "node automation/cli.js",
     "mcp": "node automation/mcp.js",
-    "test:automation": "node --test tests/automation.integration.mjs"
+    "test:automation": "node --test tests/automation.integration.mjs",
+    "test:surface-workflow": "node --test tests/surface-workflow.integration.mjs",
+    "test:surfaces": "node tests/visual/surfaces-run.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

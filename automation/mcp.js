@@ -13,7 +13,7 @@ export function createMCPServer({run=runCurve}={}) {
         const result=catalog();return {content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result};
     });
     server.registerTool('rock_budget_curve',{
-        description:'Measure customizable triangle budgets from one canonical Fjord source with 16-camera rendered opening checks. Supports skeleton, landmarks, repair, strict and unprotected modes. Only 128 px is acceptance; 64/256 are diagnostics. Source may be preset settings or an exact source.job from a UI curve export. Returns actual counts, quality verdicts and replayable JSON. May take several minutes; supports progress and cancellation. Does not export GLB.',
+        description:'Measure customizable triangle budgets from one canonical Fjord source with rendered opening checks. Supports surfaces, skeleton, landmarks, repair, strict and unprotected modes. Surfaces compares patch and skeleton seeds, fits with refineSteps (0–32), and checks 16 development plus 16 additional cameras; other modes use 16 cameras. Only 128 px is acceptance; 64/256 are diagnostics. Source may be preset settings or an exact source.job from a UI curve export. Returns actual counts, quality verdicts, smallest tested passing budget and replayable JSON. May take several minutes; supports progress and cancellation. Does not export GLB.',
         inputSchema:requestShape,annotations},async(input,extra)=>{
         if(active.size)return {isError:true,content:[{type:'text',text:'A comparison is already running. Wait for it or cancel it before starting another.'}]};
         const controller=new AbortController();active.add(controller);let progress=0;
@@ -21,7 +21,7 @@ export function createMCPServer({run=runCurve}={}) {
             const result=await run(input,{signal:AbortSignal.any([extra.signal,controller.signal]),progress:async message=>{
                 const token=extra._meta?.progressToken;if(token!==undefined)await extra.sendNotification({method:'notifications/progress',params:{progressToken:token,progress:++progress,message}});
             }});
-            const summary={source:result.source,budgets:result.budgets,size:result.size,method:result.method,
+            const summary={source:result.source,budgets:result.budgets,size:result.size,method:result.method,budgetStudy:result.budgetStudy,
                 rows:result.rows.map(row=>({target:row.target,triangles:row.triangles,verdict:row.verdict,failed:row.gpu.failed,depthP95Px:row.gpu.depthP95Px}))};
             return {content:[{type:'text',text:JSON.stringify(summary)}],structuredContent:result};
         }catch(error){return {isError:true,content:[{type:'text',text:error.message}]};}

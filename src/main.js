@@ -4,6 +4,7 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {chooseLOD,normalizeSettings} from './lod-policy.js';
 import {installBudgetCurve} from './budget-curve.js';
 import {createOpeningGPUValidator} from './opening-gpu.js';
+import {completeSurfaceLevel} from './fracture-workflow.js';
 const loadBaker=()=>import('./asset-bake.js');
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {loadAtmosphere,makeSky,setSkySun} from './atmosphere.js';
@@ -414,14 +415,15 @@ function updateLODStatus() {
         if(mesh.protection.lockedVertices)text+=` · ${mesh.protection.lockedVertices.toLocaleString()} fracture vertices fixed`;
         const opening=mesh.protection.openings;
         const gpu=mesh.protection.gpu;
-        if(gpu?.status==='checking')text+=' · Checking rendered openings…';
+        if(gpu?.status==='checking')text+=mesh.protection.mode==='surfaces'?' · Fitting and checking fracture surfaces…':' · Checking rendered openings…';
         else if(gpu?.status==='passed')text+=' · GPU opening checks passed at 128px.';
         else if(gpu?.status==='needs-review')text+=` · GPU opening checks failed in ${gpu.failed} regions. Review before export.`;
         else if(gpu?.status==='unavailable')text+=' · GPU checks unavailable. Review before export.';
         else if(opening?.status==='needs-review')text+=' · Opening checks unresolved. Review the mesh or increase the budget.';
         else if(opening?.status==='passed')text+=` · CPU estimate checked at ${opening.viewingSize}px; GPU check not available for this level.`;
         if(!mesh.budgetMet)text+=` · Budget not met (${mesh.target.toLocaleString()} requested).`;
-        else if(!mesh.qualityMet)text+=' · Budget met; fidelity tolerance exceeded.';
+        else if(mesh.protection.mode==='surfaces'&&!gpu)text+=' · Budget met; rendered quality not checked for this level.';
+        else if(!mesh.qualityMet&&gpu?.status!=='checking')text+=' · Budget met; fidelity checks not passed.';
     }
     if(el('lod-status').textContent!==text)el('lod-status').textContent=text;
     el('lod-status').classList.toggle('lod-warning',activeLOD>=0&&(!mesh.budgetMet||!mesh.qualityMet||(mesh.protection.gpu?['needs-review','unavailable'].includes(mesh.protection.gpu.status):mesh.protection.openings?.status==='needs-review')));
@@ -430,7 +432,7 @@ function updateLODStatus() {
     el('fractures').disabled=baking||state.form>=4;
     el('repair-openings').disabled=baking||state.form>=4||el('fractures').value!=='anchors';
     el('priority').disabled=baking||(state.form<4&&['anchors','strict'].includes(el('fractures').value));
-    el('fracture-help').textContent=state.form>=4?'Fracture protection applies to the four Fjord rock types.':el('fractures').value==='skeleton'?'Experimental: sparse fracture guides stay fixed while other vertices can move. Openings may change. Compare measured quality before choosing a budget.':'Landmarks use labeled mouths, walls and tips. Opening repair may exceed the budget. Keep fracture faces retains all labeled faces. Bake textures for surface detail.';
+    el('fracture-help').textContent=state.form>=4?'Fracture protection applies to the four Fjord rock types.':el('fractures').value==='surfaces'?'Experimental: compares coarse wall patches with skeleton reduction, then fits LOD 1 against rendered errors. Additional camera angles check the result. The other LODs keep coarse patch meshes.':el('fractures').value==='skeleton'?'Experimental: sparse fracture guides stay fixed while other vertices can move. Openings may change. Compare measured quality before choosing a budget.':'Landmarks use labeled mouths, walls and tips. Opening repair may exceed the budget. Keep fracture faces retains all labeled faces. Bake textures for surface detail.';
     el('glb').textContent=activeLOD<0?'Source GLB':'Export GLB';
     el('glb').title=activeLOD<0?'Source mesh with vertex colours only. Select a LOD for baked textures.':'Export the selected LOD with baked PBR textures';
     el('comparison').hidden=el('compare').value==='off';
@@ -638,8 +640,17 @@ function generate(reuse=false) {
             const bundle=assetBundle,level=bundle.levels[1],controller=new AbortController();gpuController=controller;
             level.protection.gpu={status:'checking'};updateLODStatus();
             gpuValidation=(async()=>{
-                const checker=createOpeningGPUValidator(renderer,bundle.source);
-                try {level.protection.gpu=checker?await checker.measure(level,{signal:controller.signal}):{status:'unavailable'};}
+                const checker=bundle.settings.fractures==='surfaces'?null:createOpeningGPUValidator(renderer,bundle.source);
+                try {
+                    if(bundle.settings.fractures==='surfaces'){
+                        const result=await completeSurfaceLevel(renderer,bundle.source,level,bundle.settings,{signal:controller.signal});
+                        if(assetBundle===bundle&&!controller.signal.aborted){
+                            Object.assign(level,result.level);const mesh=rockMeshes[1];mesh.geometry.dispose();mesh.geometry=asGeometry(level);mesh.userData.proceduralGeometry=mesh.geometry;
+                            const cells=el('lod-results').querySelector('[data-level="1"]').children;cells[1].textContent=level.stats.triangles.toLocaleString();cells[2].textContent=`${(100*(1-level.stats.triangles/bundle.sourceStats.triangles)).toFixed(1)}%`;
+                            window.fjordReady.levels[1]={level:1,target:level.target,...level.stats,deviation:level.deviation,protection:level.protection,budgetMet:level.budgetMet,qualityMet:level.qualityMet};render();
+                        }
+                    }else level.protection.gpu=checker?await checker.measure(level,{signal:controller.signal}):{status:'unavailable'};
+                }
                 catch(error){if(!controller.signal.aborted)level.protection.gpu={status:'unavailable',reason:String(error)};}
                 finally{checker?.dispose();if(assetBundle===bundle&&!controller.signal.aborted)updateLODStatus();}
             })();
@@ -833,7 +844,7 @@ el('reduce').onclick=()=>{
     if(!el('target').reportValidity())return;
     generate(true);
 };
-el('fractures').onchange=()=>{if(['anchors','strict'].includes(el('fractures').value))el('priority').value='quality';else if(el('fractures').value==='skeleton')el('priority').value='budget';updateLODStatus();};
+el('fractures').onchange=()=>{if(['anchors','strict'].includes(el('fractures').value))el('priority').value='quality';else if(['skeleton','surfaces'].includes(el('fractures').value))el('priority').value='budget';updateLODStatus();};
 for(const id of ['tolerance','features'])el(id).addEventListener('change',()=>budgetCurve.settingsChanged());
 el('target').onkeydown=event=>{if(event.key==='Enter')el('reduce').click();};
 el('lod-preview').onchange=()=>{el('pixel-row').hidden=el('lod-preview').value!=='auto';updateView();};

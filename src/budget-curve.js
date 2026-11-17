@@ -2,10 +2,11 @@ import {DEFAULT_BUDGETS,parseBudgets,curveSettingsKey,gpuVerdict} from './budget
 import {OPENING_ACCEPTANCE} from './opening-acceptance.js';
 import {createOpeningGPUValidator} from './opening-gpu.js';
 import {normalizeSettings} from './lod-policy.js';
+import {completeSurfaceLevel,budgetStudy} from './fracture-workflow.js';
 const $=id=>document.getElementById(id),storageKey='loverocks.budget-curve.v1';
 export function installBudgetCurve({renderer,getSource,getSettings,getIdentity,apply}) {
     let worker,controller,version=0,rows=[],selection=-1,snapshot=null,busy=false,sourceKey,supported=false,blocked=false;
-    try {const saved=JSON.parse(localStorage.getItem(storageKey));if(saved){parseBudgets(saved.budgets);$('curve-budgets').value=saved.budgets;if(['skeleton','anchors','anchors-off','strict','off'].includes(saved.method))$('curve-method').value=saved.method;if(['budget','quality'].includes(saved.priority))$('curve-priority').value=saved.priority;if([64,128,256].includes(saved.size))$('curve-size').value=saved.size;}}catch{}
+    try {const saved=JSON.parse(localStorage.getItem(storageKey));if(saved){parseBudgets(saved.budgets);$('curve-budgets').value=saved.budgets;if(['skeleton','surfaces','anchors','anchors-off','strict','off'].includes(saved.method))$('curve-method').value=saved.method;if(['budget','quality'].includes(saved.priority))$('curve-priority').value=saved.priority;if([64,128,256].includes(saved.size))$('curve-size').value=saved.size;}}catch{}
     const status=message=>$('curve-status').textContent=message;
     function cancel(message='Comparison cancelled. Completed points remain available.') {
         version++;worker?.terminate();worker=null;controller?.abort();controller=null;busy=false;
@@ -23,7 +24,9 @@ export function installBudgetCurve({renderer,getSource,getSettings,getIdentity,a
         const points=rows.map((r,i)=>({i,x:r.triangles,y:values[metric](r)})).filter(p=>Number.isFinite(p.y)).sort((a,b)=>a.x-b.x||a.i-b.i);
         $('curve-plot').hidden=!rows.length;$('curve-table').hidden=!rows.length;
         $('curve-use').disabled=blocked||selection<0;$('curve-export').disabled=blocked||!rows.length;
-        if(!rows.length){$('curve-plot').replaceChildren();$('curve-table').replaceChildren();$('curve-selected').textContent='';return;}
+        if(!rows.length){$('curve-plot').replaceChildren();$('curve-table').replaceChildren();$('curve-selected').textContent='';$('curve-floor').textContent='';return;}
+        const study=budgetStudy(rows),best=study.smallestPassing;
+        $('curve-floor').textContent=snapshot?.size!==128?'Diagnostic sizes do not establish a passing budget.':best?`Smallest passing result tested: ${best.actual.toLocaleString()} triangles (${best.requested.toLocaleString()} requested). A lower untested budget may also pass.`:'No passing budget found among the measured results.';
         const maxX=Math.max(1,...points.map(p=>p.x)),maxY=metric==='silhouette'?100:Math.max(metric==='depth'?2:1,...points.map(p=>p.y))*1.1;
         const x=n=>42+n/maxX*244,y=n=>162-n/maxY*124;
         const line=points.map(p=>`${x(p.x)},${y(p.y)}`).join(' '),ticks=[0,.5,1];
@@ -46,7 +49,7 @@ export function installBudgetCurve({renderer,getSource,getSettings,getIdentity,a
     };
     $('curve-export').onclick=()=>{
         if(!snapshot||!rows.length)return;
-        const blob=new Blob([JSON.stringify({schema:1,...snapshot,acceptancePolicy:OPENING_ACCEPTANCE,complete:rows.length===snapshot.budgets.length,rows},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+        const blob=new Blob([JSON.stringify({schema:1,...snapshot,refineSteps:8,acceptancePolicy:OPENING_ACCEPTANCE,budgetStudy:budgetStudy(rows),complete:rows.length===snapshot.budgets.length,rows},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
         a.href=url;a.download='rock-quality-budget-curve.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     };
     $('curve-run').onclick=()=>{
@@ -67,9 +70,13 @@ export function installBudgetCurve({renderer,getSource,getSettings,getIdentity,a
             if(data.error){queue=queue.then(()=>{throw Error(data.error);}).catch(fail);return;}
             if(data.level)queue=queue.then(async()=>{
                 if(id!==version||failed)return;
-                const level=data.level,gpu=await validator.measure(level,{signal,progress:p=>status(`${level.target.toLocaleString()} triangles · ${p}`)});
+                let level=data.level,gpu;
+                const progress=p=>status(`${level.target.toLocaleString()} triangles · ${p}`);
+                if(method==='surfaces')({level,gpu}=await completeSurfaceLevel(renderer,source,level,settings,{size,signal,progress}));
+                else gpu=await validator.measure(level,{signal,progress});
                 if(id!==version)return;
-                rows.push({target:level.target,triangles:level.stats.triangles,budgetMet:level.budgetMet,qualityMet:level.qualityMet,simplifierError:level.simplifierError,deviation:level.deviation,skeleton:level.protection.skeleton,cpu:{status:level.protection.openings.status,failed:level.protection.openings.failed},gpu});
+                rows.push({target:level.target,triangles:level.stats.triangles,budgetMet:level.budgetMet,qualityMet:level.qualityMet,simplifierError:level.simplifierError,deviation:level.deviation,skeleton:level.protection.skeleton,cpu:{status:level.protection.openings.status,failed:level.protection.openings.failed},
+                    ...(method==='surfaces'?{surfaces:level.protection.surfacePartition,seedSelection:level.protection.seedSelection,refinement:level.protection.refinement,development:level.protection.development,validation:level.protection.validation}:{}),gpu});
                 if(selection<0)selection=0;draw();status(`${rows.length} of ${budgets.length} budgets measured.`);
             }).catch(fail);
             if(data.done)queue=queue.then(()=>{if(id===version&&!failed){worker?.terminate();worker=null;busy=false;$('curve-run').disabled=blocked||!supported;$('curve-cancel').hidden=true;status(`${rows.length} budgets measured at ${size} pixels. ${size===128?'GPU acceptance uses the fixed opening limits.':'These are diagnostics; acceptance is defined at 128 pixels.'}`);}}).finally(()=>validator.dispose());

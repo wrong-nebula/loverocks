@@ -2,7 +2,7 @@ import {buildLODs} from '../../src/lod.js';
 import {createOpeningGPUValidator} from '../../src/opening-gpu.js';
 import {openingRegions} from '../../src/opening-acceptance.js';
 import * as T from 'three';
-function tile(frame,kind,source,size) {
+export function tile(frame,kind,source,size) {
     const width=size+16,canvas=document.createElement('canvas');canvas.width=canvas.height=width;
     const bytes=new Uint8ClampedArray(width*width*4),regions=openingRegions(source,width,width),eligible=new Set(regions.walls.filter(o=>o.pixels.length>=8).flatMap(o=>o.pixels));
     for(let i=0;i<width*width;i++) {

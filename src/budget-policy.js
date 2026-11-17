@@ -6,8 +6,8 @@ export function parseBudgets(input) {
     if(parts.some(x=>!/^\d+$/.test(x)||Number(x)<24||Number(x)>50000))throw Error('Use whole-number budgets from 24 to 50,000, separated by commas.');
     return [...new Set(parts.map(Number))].sort((a,b)=>a-b);
 }
-export function curveSettingsKey({budgets,method,size,priority,tolerance,features}) {
-    return JSON.stringify({budgets,method,size,priority,tolerance,features});
+export function curveSettingsKey({budgets,method,size,priority,tolerance,features,refineSteps=8}) {
+    return JSON.stringify({budgets,method,size,priority,tolerance,features,...(method==='surfaces'?{refineSteps}:{})});
 }
 export function gpuVerdict(check) {
     if(!check||check.status==='unavailable')return 'Not checked';

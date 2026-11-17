@@ -32,7 +32,7 @@
         <label class="row" for="target">Triangle budget<input id="target" type="number" min="24" max="50000" step="1" value="500" aria-describedby="budget-help"></label>
         <p class="help" id="budget-help">Budget for LOD 1. Near and distant meshes are generated with it.</p>
         <label class="row">Priority<select id="priority"><option value="budget">Meet budget</option><option value="quality">Preserve quality</option></select></label>
-        <label class="row">Fracture protection<select id="fractures" aria-describedby="fracture-help"><option value="off">Off</option><option value="anchors">Rim landmarks</option><option value="skeleton">Fracture skeleton · experimental</option><option value="strict">Keep fracture faces</option></select></label>
+        <label class="row">Fracture protection<select id="fractures" aria-describedby="fracture-help"><option value="off">Off</option><option value="anchors">Rim landmarks</option><option value="skeleton">Fracture skeleton · experimental</option><option value="surfaces">Fracture surfaces · experimental</option><option value="strict">Keep fracture faces</option></select></label>
         <p class="help" id="fracture-help">Landmarks use labeled mouths, walls and tips. Opening repair may exceed the budget. Keep fracture faces retains all labeled faces. Bake textures for surface detail.</p>
         <label class="row">Opening repair<select id="repair-openings" aria-describedby="repair-help"><option value="on" selected>Check &amp; repair</option><option value="off">Off</option></select></label>
         <p class="help" id="repair-help">Checks near, background and distant viewing sizes. Review unresolved openings before export.</p>
@@ -47,7 +47,7 @@
           <label class="curve-label" for="curve-budgets">Triangle budgets</label>
           <input id="curve-budgets" type="text" value="500, 750, 1000, 2000" spellcheck="false" aria-describedby="curve-help" disabled>
           <p class="help" id="curve-help">Compare up to 12 budgets from 24 to 50,000. Separate them with commas.</p>
-          <label class="row">Method<select id="curve-method"><option value="skeleton">Fracture skeleton</option><option value="anchors-off">Landmarks · repair off</option><option value="anchors">Landmarks + repair</option><option value="strict">Keep fracture faces</option><option value="off">Unprotected</option></select></label>
+          <label class="row">Method<select id="curve-method"><option value="skeleton">Fracture skeleton</option><option value="surfaces">Fracture surfaces + fitting</option><option value="anchors-off">Landmarks · repair off</option><option value="anchors">Landmarks + repair</option><option value="strict">Keep fracture faces</option><option value="off">Unprotected</option></select></label>
           <label class="row">Priority<select id="curve-priority"><option value="budget">Meet budget</option><option value="quality">Preserve quality</option></select></label>
           <label class="row">Viewing size<select id="curve-size"><option value="64">64 pixels</option><option value="128" selected>128 pixels</option><option value="256">256 pixels</option></select></label>
           <p class="help">Uses the current fidelity tolerance and feature emphasis. Repair may exceed a requested budget. The experimental skeleton uses sparse fracture guides and movable vertices. Check its measured quality before use.</p>
@@ -56,7 +56,8 @@
           <label class="row">Plot<select id="curve-metric"><option value="depth">Wall depth error</option><option value="silhouette">Silhouette overlap</option><option value="failures">Failed regions</option></select></label>
           <div id="curve-plot" hidden></div><div id="curve-table" hidden></div>
           <p id="curve-selected" class="help" aria-live="polite"></p>
-          <p class="help">GPU measurements from 16 cameras. Acceptance at 128 pixels requires each important opening to retain coverage and wall depth error to stay within 2 pixels. Other sizes are diagnostics.</p>
+          <p id="curve-floor" class="help" aria-live="polite"></p>
+          <p class="help">GPU measurements from 16 cameras. Surface fitting also checks 16 additional angles after optimization. Acceptance at 128 pixels requires each important opening to retain coverage and wall depth error to stay within 2 pixels. Other sizes are diagnostics.</p>
           <div class="curve-actions"><button id="curve-use" type="button" disabled>Use selected budget</button><button id="curve-export" type="button" disabled>Export measurements</button></div>
         </details>
         <button id="reduce" class="wide" disabled>Apply budget</button>

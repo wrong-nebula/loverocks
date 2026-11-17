@@ -10,8 +10,9 @@ function geometry(mesh) {
 }
 // This is an actual GPU observation, independent of CPU ray witnesses. The
 // acceptance policy stays fixed; other viewing sizes are explicitly diagnostic.
-export function createOpeningGPUValidator(renderer,source,{size=128,azimuths=8}={}) {
+export function createOpeningGPUValidator(renderer,source,{size=128,azimuths=8,viewSet='development'}={}) {
     if(![64,128,256].includes(size)||![4,8].includes(azimuths))throw Error('Unsupported opening capture size or camera set.');
+    if(!['development','validation'].includes(viewSet))throw Error('Unknown opening camera set.');
     const semantic=fractureSemantics(source);if(!semantic)return null;
     const width=size+16,ss=2,reference=geometry(source),sphere=reference.boundingSphere;
     const scene=new T.Scene();scene.background=new T.Color(0);
@@ -26,7 +27,8 @@ export function createOpeningGPUValidator(renderer,source,{size=128,azimuths=8}=
     const tags=new T.ShaderMaterial({vertexShader:'attribute vec2 feature; varying vec2 tag; void main(){tag=feature;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
         fragmentShader:'varying vec2 tag; void main(){float id=floor(tag.x+0.5);gl_FragColor=vec4(mod(id,256.)/255.,floor(id/256.)/255.,tag.y/255.,1.);}'});
     const target=new T.WebGLRenderTarget(width*ss,width*ss),floatTarget=new T.WebGLRenderTarget(width*ss,width*ss,{type:T.FloatType});
-    const views=[];for(const [height,elevation] of [['low',.15],['high',.65]])for(let a=0;a<azimuths;a++)views.push({name:`${height}-${a}`,elevation,azimuth:a*2*Math.PI/azimuths});
+    const views=[],heights=viewSet==='development'?[['low',.15],['high',.65]]:[['check-low',.35],['check-high',.85]];
+    for(const [height,elevation] of heights)for(let a=0;a<azimuths;a++)views.push({name:`${height}-${a}`,elevation,azimuth:(a+(viewSet==='validation'?.5:0))*2*Math.PI/azimuths});
     const references=new Map();let disposed=false;
     function capture(g,m,pass) {
         mesh.geometry=g;mesh.material=m;
@@ -72,13 +74,13 @@ export function createOpeningGPUValidator(renderer,source,{size=128,azimuths=8}=
                     signal?.throwIfAborted();progress(`Checking openings · ${view.name}`);
                     const frames=frame(view,candidate),acceptance=openingAcceptance(frames.source,frames.candidate,width,width,size);
                     for(let i=0;i<width*width;i++){const a=frames.source.silhouette[i*4]>127,b=frames.candidate.silhouette[i*4]>127;if(a||b)union++;if(a&&b)intersection++;}
-                    await onFrame(view,frames,acceptance);rows.push({view:view.name,acceptance});await pause();
+                    await onFrame({...view,camera:camera.clone(),width,front:depth.uniforms.front.value,diameter:2*sphere.radius},frames,acceptance);rows.push({view:view.name,acceptance});await pause();
                 }
             }finally{candidate.dispose();}
             const openings=rows.flatMap(row=>row.acceptance.openings.map(o=>({...o,view:row.view}))),failed=openings.filter(o=>!o.accepted),depths=openings.filter(o=>o.kind==='wall'&&o.depthP95Px!==null).map(o=>o.depthP95Px);
             const gaps=openings.filter(o=>o.kind==='opening'),gapPixels=gaps.reduce((n,o)=>n+o.pixels,0),filled=gaps.reduce((n,o)=>n+o.filledPixels,0);
             return {method:'gpu',status:!openings.length?'not-visible':failed.length?'needs-review':'passed',inScope:size===OPENING_ACCEPTANCE.viewingSize,
-                viewingSize:size,cameras:views.length,tested:openings.length,failed:failed.length,failures:failed,
+                viewingSize:size,cameras:views.length,viewSet,tested:openings.length,failed:failed.length,failures:failed,
                 depthP95Px:depths.length?Math.max(...depths):null,silhouetteIoU:union?intersection/union:null,gapFill:gapPixels?filled/gapPixels:null,rows};
         },
         dispose(){disposed=true;for(const resource of [reference,semanticGeometry,white,depth,tags,target,floatTarget])resource.dispose();references.clear();}

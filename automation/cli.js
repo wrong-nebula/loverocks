@@ -17,12 +17,13 @@ Curve options:
   --seed TEXT           Preset seed when omitted
   --resolution 16..256  Source detail (default 54)
   --budgets LIST        Up to 12 integer budgets, 24..50000
-  --method NAME         skeleton | anchors-off | anchors | strict | off
+  --method NAME         skeleton | surfaces | anchors-off | anchors | strict | off
   --priority NAME       budget | quality (landmark/strict require quality)
   --tolerance NUMBER    Combined simplifier tolerance, .001.. .5
   --features NUMBER     Feature emphasis, 0..3
   --size 64|128|256     Only 128 px can pass acceptance
   --detail summary|full Include per-camera observations with full
+  --refine-steps 0..32  Rendered fitting iterations for surfaces (default 8)
   --input FILE          Request JSON or exported UI curve JSON
   --out FILE            Write JSON to a new file (otherwise stdout)
   --force               Allow replacing --out
@@ -38,7 +39,7 @@ process.once('SIGINT',()=>controller.abort());process.once('SIGTERM',()=>control
 try {
     const {values,positionals}=parseArgs({allowPositionals:true,options:{
         help:{type:'boolean',short:'h'},force:{type:'boolean'},quiet:{type:'boolean'},'require-pass':{type:'boolean'},
-        ...Object.fromEntries(['form','seed','resolution','budgets','method','priority','tolerance','features','size','detail','input','out','timeout-ms'].map(key=>[key,{type:'string'}]))}});
+        ...Object.fromEntries(['form','seed','resolution','budgets','method','priority','tolerance','features','size','detail','input','out','timeout-ms','refine-steps'].map(key=>[key,{type:'string'}]))}});
     const [command,...rest]=positionals;if(rest.length)throw Error('Unexpected positional arguments. Use --help.');
     if(values.help||!command)process.stdout.write(help);
     else if(command==='catalog')process.stdout.write(JSON.stringify(catalog(),null,2)+'\n');
@@ -55,6 +56,7 @@ try {
         for(const key of ['method','priority','detail'])if(values[key]!==undefined)input[key]=values[key];
         for(const key of ['tolerance','features','size'])if(values[key]!==undefined)input[key]=Number(values[key]);
         if(values['timeout-ms']!==undefined)input.timeoutMs=Number(values['timeout-ms']);
+        if(values['refine-steps']!==undefined)input.refineSteps=Number(values['refine-steps']);
         if(values.budgets!==undefined)input.budgets=parseBudgets(values.budgets);
         const result=await runCurve(input,{signal:controller.signal,progress:message=>{if(!values.quiet)process.stderr.write(message+'\n');}});
         const json=JSON.stringify(result,null,2)+'\n';

@@ -1,7 +1,7 @@
 export const LOD_DEFAULTS=Object.freeze({target:500,priority:'budget',tolerance:.03,features:1,fractures:'off',openingRepair:true});
 export function normalizeSettings(input={}) {
     const number=(v,fallback,min,max)=>Number.isFinite(Number(v))?Math.min(max,Math.max(min,Number(v))):fallback;
-    const fractures=['anchors','strict','skeleton'].includes(input.fractures)?input.fractures:'off';
+    const fractures=['anchors','strict','skeleton','surfaces'].includes(input.fractures)?input.fractures:'off';
     return {target:Math.round(number(input.target,500,24,50000)),priority:input.priority==='quality'||['anchors','strict'].includes(fractures)?'quality':'budget',
         tolerance:number(input.tolerance,.03,.001,.5),features:number(input.features,1,0,3),
         fractures,openingRepair:input.openingRepair!==false};

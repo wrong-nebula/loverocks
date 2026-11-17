@@ -4,13 +4,15 @@
 
 The curve is measured on the current canonical source, not fitted to a preset table. Open **Game asset → Quality vs budget**, enter 1–12 integer budgets between 24 and 50,000, and choose a method. Commas, spaces and semicolons are accepted; duplicates are removed and budgets are sorted. Invalid entries produce an error rather than silently changing the request.
 
-- Methods: fracture skeleton, landmarks without repair, landmarks with repair, all fracture faces, or unprotected reduction.
-- Priority: meet budget or preserve quality. Landmark and all-face methods require quality priority, shown as a disabled quality selection. Skeleton and unprotected modes support both.
+- Methods: fracture surfaces with fitting, fracture skeleton, landmarks without repair, landmarks with repair, all fracture faces, or unprotected reduction.
+- Priority: meet budget or preserve quality. Landmark and all-face methods require quality priority, shown as a disabled quality selection. Surfaces, skeleton and unprotected modes support both.
 - Tolerance and feature emphasis come from Preservation settings. Budget priority may exceed the simplifier tolerance.
 - Viewing size: 64, 128 or 256 physical pixels. Only 128 pixels is the acceptance contract; other sizes are diagnostics.
 - Plot: worst per-wall p95 depth error, silhouette overlap or failed region checks. The x-axis uses actual triangles; the table also retains requested budgets.
 
-Each point is reduced independently from the source in a terminable worker and measured on the GPU from 16 cameras. Cancel stops pending work and retains completed points. Editing comparison settings or changing the source invalidates old measurements. Applying a selected point reuses the source and generates the full near/background/distant LOD set. Settings are saved in local storage after starting a valid comparison. Reset budgets restores the default budget list only.
+Each point is reduced independently from the source in a terminable worker and measured on the GPU from 16 cameras. Surface fitting uses these as development views, then checks 16 additional angles; both sets must pass. The studio runs up to eight fitting iterations. Cancel stops pending work and retains completed points. Editing comparison settings or changing the source invalidates old measurements. Applying a selected point reuses the source and generates the full near/background/distant LOD set. Settings are saved in local storage after starting a valid comparison. Reset budgets restores the default budget list only.
+
+The curve reports the smallest actual passing mesh among the tested budgets. This is not a proven minimum: a lower untested budget may pass. A diagnostic-size result cannot establish a passing budget.
 
 **Export measurements** saves source identity, settings, actual counts, CPU estimates, GPU observations and the fixed acceptance policy. Partial exports are marked incomplete. Changing the plotted metric only changes the display, not the measured data. Curves do not measure bake fidelity, texture memory, runtime performance or LOD-transition flicker.
 
@@ -74,3 +76,7 @@ npm run test:glb -- /path/to/export.glb
 Budget runs write JSON and source/LOD silhouette, depth and wall-error contact sheets into `output/fracture-skeleton/budget-check/` and `budget-held-out/`. These are observational sweeps: quality failures remain in the report and do not themselves fail the command. Browser errors do fail. `test:fracture-cases` fails if either repaired fixture fails CPU or GPU acceptance; its frozen v3 repair fixture lives under `tests/fixtures/opening-v3/`.
 
 Unit tests cover immutable sources, deterministic reduction, retained fixed guides, unit normals, compacted metadata, feature-emphasis behavior and no new open edges on the tested mesh. These checks are not a general proof of manifold topology. The existing broader baked-material visual suite remains separate; its v3 baseline is not silently replaced by these measurements.
+
+## Coarse surfaces and rendered fitting
+
+The new experimental surface workflow is documented in [fracture-surfaces.md](fracture-surfaces.md). It adds a connected patch representation, constrained reduction, finite rendered-error fitting and fresh-seed budget studies without replacing the historical results above. Only background LOD 1 receives fitting in the main studio; near and distant LODs retain coarse patch meshes and are explicitly unvalidated.
