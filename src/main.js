@@ -99,13 +99,13 @@ const rockGroup=new T.Group();
 scene.add(rockGroup);
 let landscape,worker,jobId=0,jobs=[],rockMeshes=[],rockTimer;
 let exposureHistory,historyKey;
-let assetBundle,sourceMesh,activeLOD=1,baking=false,bakeController;
+let assetBundle,sourceMesh,activeLOD=-1,baking=false,bakeController;
 const bakedAssets=new Map();
 let gpuController,gpuValidation=Promise.resolve();
 const budgetCurve=installBudgetCurve({renderer,getSource:()=>window.fjordReady?assetBundle?.source:null,getSettings:optimizationSettings,
     getIdentity:()=>({form:state.form,seed:state.seed,job:jobs[0]}),apply:settings=>{
         el('target').value=settings.target;el('fractures').value=settings.fractures;el('repair-openings').value=settings.openingRepair?'on':'off';
-        el('priority').value=settings.priority;el('tolerance').value=settings.tolerance;el('features').value=settings.features;generate(true);
+        el('priority').value=settings.priority;el('tolerance').value=settings.tolerance;el('features').value=settings.features;requestLODs();
     }});
 const silhouette=new T.MeshBasicMaterial({color:0xffffff});
 const renderSize=new T.Vector2(),cameraPoint=new T.Vector3();
@@ -395,7 +395,7 @@ function showOnly(level) {
     rockMeshes.forEach((mesh,index)=>mesh.visible=index===level);
 }
 function selectedLOD() {
-    if(turntableMode||el('lod-preview').value==='source')return -1;
+    if(turntableMode||!assetBundle?.levels.length||el('lod-preview').value==='source')return -1;
     if(el('lod-preview').value!=='auto')return Number(el('lod-preview').value);
     camera.updateMatrixWorld();
     cameraPoint.copy(sourceMesh.geometry.boundingSphere.center).applyMatrix4(sourceMesh.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
@@ -405,6 +405,7 @@ function selectedLOD() {
 }
 function updateLODStatus() {
     if(!assetBundle)return;
+    const hasLODs=assetBundle.levels.length>0;
     const mesh=activeLOD<0?assetBundle.source:assetBundle.levels[activeLOD];
     const stats=activeLOD<0?assetBundle.sourceStats:mesh.stats;
     const label=activeLOD<0?'Source':`LOD ${activeLOD}`;
@@ -428,14 +429,17 @@ function updateLODStatus() {
     if(el('lod-status').textContent!==text)el('lod-status').textContent=text;
     el('lod-status').classList.toggle('lod-warning',activeLOD>=0&&(!mesh.budgetMet||!mesh.qualityMet||(mesh.protection.gpu?['needs-review','unavailable'].includes(mesh.protection.gpu.status):mesh.protection.openings?.status==='needs-review')));
     for(const row of el('lod-results').querySelectorAll('[data-level]'))row.dataset.selected=Number(row.dataset.level)===activeLOD;
+    el('reduce').textContent=hasLODs?'Apply budget':'Reduce LODs';
     el('bake').disabled=baking||activeLOD<0||!window.fjordReady;
+    el('lod-export').disabled=baking||!hasLODs||!window.fjordReady;
+    el('compare').disabled=baking||!hasLODs||!window.fjordReady;
     el('fractures').disabled=baking||state.form>=4;
     el('repair-openings').disabled=baking||state.form>=4||el('fractures').value!=='anchors';
     el('priority').disabled=baking||(state.form<4&&['anchors','strict'].includes(el('fractures').value));
     el('fracture-help').textContent=state.form>=4?'Fracture protection applies to the four Fjord rock types.':el('fractures').value==='surfaces'?'Experimental: compares coarse wall patches with skeleton reduction, then fits LOD 1 against rendered errors. Additional camera angles check the result. The other LODs keep coarse patch meshes.':el('fractures').value==='skeleton'?'Experimental: sparse fracture guides stay fixed while other vertices can move. Openings may change. Compare measured quality before choosing a budget.':'Landmarks use labeled mouths, walls and tips. Opening repair may exceed the budget. Keep fracture faces retains all labeled faces. Bake textures for surface detail.';
     el('glb').textContent=activeLOD<0?'Source GLB':'Export GLB';
-    el('glb').title=activeLOD<0?'Source mesh with vertex colours only. Select a LOD for baked textures.':'Export the selected LOD with baked PBR textures';
-    el('comparison').hidden=el('compare').value==='off';
+    el('glb').title=activeLOD<0?'Source mesh with vertex colours only. Reduce and select a LOD for baked textures.':'Export the selected LOD with baked PBR textures';
+    el('comparison').hidden=!hasLODs||el('compare').value==='off';
     el('comparison-lod').textContent=`${label} · ${stats.triangles.toLocaleString()} tris${baked?' · Baked':''}`;
     window.fjordLOD={active:activeLOD,triangles:stats.triangles,baked:bakedAssets.has(activeLOD)};
 }
@@ -443,7 +447,7 @@ function render() {
     if(import.meta.env.DEV&&params.has('quality-test'))return;
     if(!assetBundle||!sourceMesh){renderer.render(scene,camera);return;}
     activeLOD=selectedLOD();showOnly(activeLOD);updateLODStatus();
-    const comparison=el('compare').value;
+    const comparison=assetBundle.levels.length?el('compare').value:'off';
     const originalOverride=scene.overrideMaterial,background=scene.background,fog=scene.fog,floor=landscape.visible;
     if(comparison==='silhouette'){
         scene.overrideMaterial=silhouette;scene.background=new T.Color(0x151813);scene.fog=null;landscape.visible=false;
@@ -572,7 +576,7 @@ function updateView() {
     landscape.visible=state.view==='material'||state.view==='clay';
     render();
 }
-function generate(reuse=false) {
+function generate({reuse=false,reduce=false}={}) {
     if(baking)return;
     gpuController?.abort();
     if(!reuse)budgetCurve.sourcePending();else budgetCurve.cancel('Updating mesh…');
@@ -580,13 +584,20 @@ function generate(reuse=false) {
     if(!reuse){worker?.terminate();worker=undefined;}
     clearBakes();
     window.fjordReady=null;
+    if(!reduce){
+        el('lod-preview').value='source';
+        el('pixel-row').hidden=true;
+        el('compare').value='off';
+        el('compare-help').hidden=true;
+        el('lod-results').replaceChildren();
+    }
     worker??=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
     const id=++jobId;
     const fitCamera=!sourceMesh||sourceMesh.userData.form!==state.form;
-    el('status').textContent='Building rock meshes…';
+    el('status').textContent=reduce?'Reducing LOD meshes…':'Building rock mesh…';
     el('glb').disabled=true;
     el('png').disabled=true;
-    for(const id of ['reduce','lod-preview','bake','lod-export','curve-run','curve-use'])el(id).disabled=true;
+    for(const id of ['reduce','lod-preview','compare','bake','lod-export','curve-run','curve-use'])el(id).disabled=true;
     const detail=turntableMode?160:Number(el('detail').value);
     // Moss grows facing away from the prevailing sun; elevation is a fixed typical
     // value so the Sun elevation slider can relight without regrowing.
@@ -625,18 +636,21 @@ function generate(reuse=false) {
             mesh.castShadow=mesh.receiveShadow=true;rockGroup.add(mesh);rockMeshes.push(mesh);
         }
         incoming=[];
+        const hasLODs=assetBundle.levels.length>0;
         el('status').textContent='';
-        for(const id of ['glb','png','reduce','lod-preview','lod-export'])el(id).disabled=false;
-        el('lod-results').innerHTML=`<table class="lod-table"><thead><tr><th>Mesh</th><th>Triangles</th><th>Reduction</th></tr></thead><tbody>
+        for(const id of ['glb','png','reduce','lod-preview'])el(id).disabled=false;
+        el('lod-export').disabled=!hasLODs;
+        el('compare').disabled=!hasLODs;
+        el('lod-results').innerHTML=hasLODs?`<table class="lod-table"><thead><tr><th>Mesh</th><th>Triangles</th><th>Reduction</th></tr></thead><tbody>
             <tr data-level="-1"><td>Source</td><td>${assetBundle.sourceStats.triangles.toLocaleString()}</td><td>—</td></tr>
             ${assetBundle.levels.map(l=>`<tr data-level="${l.level}"><td>LOD ${l.level}</td><td>${l.stats.triangles.toLocaleString()}</td><td>${(100*(1-l.stats.triangles/assetBundle.sourceStats.triangles)).toFixed(1)}%</td></tr>`).join('')}
-            </tbody></table>`;
+            </tbody></table>`:'';
         el('bake-status').textContent='Bakes colour, normals, roughness and AO for portable GLB export.';
         window.fjordReady={meshes:1,triangles:assetBundle.sourceStats.triangles,levels:assetBundle.levels.map(l=>({level:l.level,target:l.target,...l.stats,deviation:l.deviation,protection:l.protection,budgetMet:l.budgetMet,qualityMet:l.qualityMet}))};
         updateView();
         if(fitCamera&&!turntableMode)cameraReset();
         budgetCurve.sourceChanged(JSON.stringify(jobs[0]),state.form<4);
-        if(state.form<4&&assetBundle.settings.fractures!=='off') {
+        if(hasLODs&&state.form<4&&assetBundle.settings.fractures!=='off') {
             const bundle=assetBundle,level=bundle.levels[1],controller=new AbortController();gpuController=controller;
             level.protection.gpu={status:'checking'};updateLODStatus();
             gpuValidation=(async()=>{
@@ -658,7 +672,7 @@ function generate(reuse=false) {
         document.dispatchEvent(new Event('fjord:ready'));
     };
     worker.onerror=event=>{if(id!==jobId)return;el('status').textContent=event.message||'The mesh worker could not start.';worker?.terminate();worker=undefined;el('reduce').disabled=false;};
-    worker.postMessage({id,jobs,optimization:optimizationSettings()});
+    worker.postMessage({id,jobs,optimization:optimizationSettings(),reduce});
 }
 function updateUrl() {
     const query=new URLSearchParams({form:state.form,seed:state.seed});
@@ -840,14 +854,27 @@ function manifest() {
             textureSize:bakedAssets.get(l.level)?.size??null,exportStats:bakedAssets.get(l.level)?.stats??null,
             projection:bakedAssets.get(l.level)?.projection??null}))};
 }
-el('reduce').onclick=()=>{
-    if(!el('target').reportValidity())return;
-    generate(true);
-};
+function requestLODs(preview) {
+    if(!el('target').reportValidity())return false;
+    if(preview)el('lod-preview').value=preview;
+    else if(el('lod-preview').value==='source')el('lod-preview').value='1';
+    el('pixel-row').hidden=el('lod-preview').value!=='auto';
+    generate({reuse:true,reduce:true});
+    return true;
+}
+el('reduce').onclick=()=>requestLODs();
 el('fractures').onchange=()=>{if(['anchors','strict'].includes(el('fractures').value))el('priority').value='quality';else if(['skeleton','surfaces'].includes(el('fractures').value))el('priority').value='budget';updateLODStatus();};
 for(const id of ['tolerance','features'])el(id).addEventListener('change',()=>budgetCurve.settingsChanged());
 el('target').onkeydown=event=>{if(event.key==='Enter')el('reduce').click();};
-el('lod-preview').onchange=()=>{el('pixel-row').hidden=el('lod-preview').value!=='auto';updateView();};
+el('lod-preview').onchange=()=>{
+    const value=el('lod-preview').value;
+    el('pixel-row').hidden=value!=='auto';
+    if(value!=='source'&&!assetBundle?.levels.length){
+        if(!requestLODs(value)){el('lod-preview').value='source';el('pixel-row').hidden=true;}
+        return;
+    }
+    updateView();
+};
 el('compare').onchange=()=>{el('compare-help').hidden=el('compare').value==='off';render();};
 el('pixel-error').onchange=render;
 el('preview-size').onchange=()=>{
@@ -898,7 +925,7 @@ new ResizeObserver(()=>{
 }).observe(viewport);
 resetSurface();sync();landscapeUpdate();cameraReset();lights();
 if(import.meta.env.DEV&&params.has('quality-test'))el('detail').value='32';
-Promise.all([atmosphereLoad,surfaceLoad]).then(generate);
+Promise.all([atmosphereLoad,surfaceLoad]).then(()=>generate());
 
 // A dev-only adapter lets visual tests exercise the real source shader and
 // portable baker. Vite removes this branch from production builds.
@@ -922,7 +949,7 @@ if(import.meta.env.DEV&&params.has('quality-test')) {
 if(turntableMode) {
     let captureCanvas, captureContext, orbit;
     window.prepareTurntable=(size=2160,samples=1.5)=>{
-        if(!atmosphereReady||!rockMeshes.length) throw Error('Wait for the sky and specimen to load.');
+        if(!atmosphereReady||!sourceMesh) throw Error('Wait for the sky and specimen to load.');
         scene.background.set(0);
         scene.fog=null;
         landscape.visible=false;

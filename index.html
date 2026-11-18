@@ -25,12 +25,12 @@
         <label class="row" id="form-row">Rock type<select id="form"><optgroup label="Fjord rocks"><option value="0">Overhang</option><option value="1">Split boulder</option><option value="2">Upright slab</option><option value="3">Path stone</option></optgroup><optgroup id="volcanic-forms" label="Volcanic rocks"></optgroup><optgroup id="geology-forms" label="Rock specimens"></optgroup></select></label>
         <form id="seed-form"><label for="seed">Seed</label><div class="seed"><input id="seed" maxlength="96" autocomplete="off" spellcheck="false"><button>Apply</button><button type="button" id="shuffle" aria-label="Randomize seed" title="Randomize seed"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h.01m6 0h.01m-3 3h.01m-3 3h.01m6 0h.01"/></svg></button></div></form>
         <button type="button" id="randomize" class="randomize" title="Roll a new rock: type, seed, climate and weathering (R)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>Randomize</button>
-        <label class="row">Source detail<select id="detail"><option value="32">Draft</option><option value="54">Detailed</option><option value="88">Fine</option><option value="144" selected>High</option><option value="224">Ultra</option><option value="256">Maximum</option></select></label>
+        <label class="row">Source detail<select id="detail"><option value="32">Draft</option><option value="54">Detailed</option><option value="88">Fine</option><option value="144">High</option><option value="224">Ultra</option><option value="256" selected>Maximum</option></select></label>
       </section>
       <section aria-labelledby="optimization-title">
         <h2 id="optimization-title">Game asset</h2>
         <label class="row" for="target">Triangle budget<input id="target" type="number" min="24" max="50000" step="1" value="500" aria-describedby="budget-help"></label>
-        <p class="help" id="budget-help">Budget for LOD 1. Near and distant meshes are generated with it.</p>
+        <p class="help" id="budget-help">Budget for LOD 1. Source stays at full detail until you reduce LODs.</p>
         <label class="row">Priority<select id="priority"><option value="budget">Meet budget</option><option value="quality">Preserve quality</option></select></label>
         <label class="row">Fracture protection<select id="fractures" aria-describedby="fracture-help"><option value="off">Off</option><option value="anchors">Rim landmarks</option><option value="skeleton">Fracture skeleton · experimental</option><option value="surfaces">Fracture surfaces · experimental</option><option value="strict">Keep fracture faces</option></select></label>
         <p class="help" id="fracture-help">Landmarks use labeled mouths, walls and tips. Opening repair may exceed the budget. Keep fracture faces retains all labeled faces. Bake textures for surface detail.</p>
@@ -60,10 +60,10 @@
           <p class="help">GPU measurements from 16 cameras. Surface fitting also checks 16 additional angles after optimization. Acceptance at 128 pixels requires each important opening to retain coverage and wall depth error to stay within 2 pixels. Other sizes are diagnostics.</p>
           <div class="curve-actions"><button id="curve-use" type="button" disabled>Use selected budget</button><button id="curve-export" type="button" disabled>Export measurements</button></div>
         </details>
-        <button id="reduce" class="wide" disabled>Apply budget</button>
+        <button id="reduce" class="wide" disabled>Reduce LODs</button>
         <div id="lod-results" aria-live="polite"></div>
-        <label class="row">Preview<select id="lod-preview" disabled><option value="source">Source</option><option value="0">LOD 0 · Near</option><option value="1" selected>LOD 1 · Background</option><option value="2">LOD 2 · Distant</option><option value="auto">Automatic</option></select></label>
-        <label class="row">Compare<select id="compare"><option value="off">Off</option><option value="split">Split view</option><option value="silhouette">Silhouettes</option></select></label>
+        <label class="row">Preview<select id="lod-preview" disabled><option value="source" selected>Source</option><option value="0">LOD 0 · Near</option><option value="1">LOD 1 · Background</option><option value="2">LOD 2 · Distant</option><option value="auto">Automatic</option></select></label>
+        <label class="row">Compare<select id="compare" disabled><option value="off">Off</option><option value="split">Split view</option><option value="silhouette">Silhouettes</option></select></label>
         <label class="row">Viewing size<select id="preview-size"><option value="fit">Fit to view</option><option value="512">512 render pixels</option><option value="256">256 render pixels</option><option value="128">128 render pixels</option><option value="64">64 render pixels</option></select></label>
         <p class="help" id="compare-help" hidden>Source on the left; selected LOD on the right. Both use the same camera.</p>
         <label class="row" id="pixel-row" hidden>Pixel tolerance<select id="pixel-error"><option value="0.5">0.5 px</option><option value="1" selected>1 px</option><option value="2">2 px</option><option value="4">4 px</option></select></label>

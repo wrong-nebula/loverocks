@@ -4,7 +4,7 @@
 
 **Fjord Stone** is a procedural rock studio that runs in the browser. Rust evaluates signed distance fields, cuts joints, carves eroded relief and extracts indexed meshes with surface masks. A Web Worker runs the generator as WebAssembly, and Three.js lights and renders the result in WebGL 2.
 
-You orbit a single rock, chosen from 13 types, under a physically based sky. A canonical source builds at **High** detail (resolution 144) by default, then an attribute-aware reducer generates three compact LODs. The default background mesh has a **500-triangle budget**; the actual count and any quality compromise are shown. **Maximum** source detail goes to 256.
+You orbit a single rock, chosen from 13 types, under a physically based sky. A canonical high-poly source builds at **Maximum** detail (resolution 256) by default and is shown directly in the viewport. When you ask for game-asset optimization, an attribute-aware reducer generates three compact LODs on demand (with a default **500-triangle budget** for the background mesh, reporting actual counts and any quality compromise).
 
 ## Rock types
 
@@ -31,7 +31,7 @@ Drag to orbit, scroll or pinch to zoom, and right-drag to pan. Source detail con
 ## Game asset workflow
 
 1. Choose the source type, seed and surface settings.
-2. Set the **Triangle budget** for LOD 1. LOD 0 targets four times that budget; LOD 2 targets roughly one quarter. **Apply budget** reuses the canonical source.
+2. Set the **Triangle budget** for LOD 1. LOD 0 targets four times that budget; LOD 2 targets roughly one quarter. **Reduce LODs** (then **Apply budget**) builds the three levels on demand from the cached canonical source.
 3. Choose **Meet budget** to allow additional error, or **Preserve quality** to stop at the selected combined geometry/attribute tolerance. For Fjord rocks, **Rim landmarks** and **Keep fracture faces** enforce the fidelity tolerance and can exceed the triangle target. The experimental **Fracture skeleton** fixes sparse guides and allows other vertices to move; it supports either priority. Actual counts and fixed vertices are reported. The tolerance percentage is a simplifier score, not a surface-distance guarantee.
 4. Inspect the **split view**, **silhouettes**, wireframe and masks. **Viewing size** frames the source bounding sphere at a chosen number of physical render pixels. **Automatic** uses sampled surface deviation, projection and 15% hysteresis; it can fall back to Source up close.
 5. **Bake & preview** transfers source detail to a UV atlas with base colour, tangent-space normals and packed occlusion/roughness/metalness. Pick 256, 512 or 1024 px. Geometry and uncompressed texture memory are reported separately.
